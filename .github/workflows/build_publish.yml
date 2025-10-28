@@ -1,4 +1,4 @@
-name: build and publish
+name: Publish to Docker
 
 on:
   release:
@@ -12,18 +12,6 @@ env:
 jobs:
   docker:
     runs-on: ubuntu-latest
-
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - dockerfile: ./Dockerfile-API
-            image: -api
-            context: .
-          - dockerfile: ./Dockerfile-Seeder
-            image: -seeder
-            context: .
-
     permissions:
       contents: read
       packages: write
@@ -41,20 +29,19 @@ jobs:
 
       - name: Extract metadata (tags, labels) for Docker
         id: meta
-        uses: docker/metadata-action@98669ae865ea3cffbcbaa878cf57c20bbf1c6c38
+        uses: docker/metadata-action@v5
         with:
-          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}${{ matrix.image }}
-
-      - name: install modules
-        run: npm i
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          tags: |
+            type=semver,pattern={{raw}}
 
       - name: Build and push
-        uses: docker/build-push-action@v3
+        uses: docker/build-push-action@v5
         with:
-          context: ${{ matrix.context }}
-          file: ${{ matrix.dockerfile }}
+          context: ./
+          file: ./Dockerfile
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           build-args: |
-            CI_BUILD_VERSION=${{ github.ref_name }}
+            CI_BUILD_VERSION=${{ steps.meta.outputs.version }}
