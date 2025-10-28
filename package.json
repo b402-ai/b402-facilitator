@@ -1,15 +1,18 @@
 {
-	"name": "@b402/facilitator",
+	"name": "@b402-ai/b402-facilitator",
 	"version": "1.0.0",
-	"description": "B402 Payment Facilitator Service",
+	"description": "B402 Facilitator",
 	"private": true,
 	"type": "module",
 	"scripts": {
+		"prepare": "husky install",
 		"build": "tsc",
 		"start": "tsx watch --clear-screen=false ./src/index.ts",
 		"dev": "tsx watch --clear-screen=false ./src/index.ts",
-		"lint": "eslint src/**/*.ts",
-		"type-check": "tsc --noEmit"
+		"lint": "eslint .",
+		"lint:fix": "eslint --fix .",
+		"format": "prettier --check .",
+		"format:fix": "prettier --write ."
 	},
 	"dependencies": {
 		"@fastify/cors": "^9.0.1",
@@ -22,6 +25,12 @@
 	},
 	"devDependencies": {
 		"@types/node": "^20.11.24",
+		"@trivago/prettier-plugin-sort-imports": "^4.2.0",
+		"@typescript-eslint/eslint-plugin": "^6.3.0",
+		"@typescript-eslint/parser": "^6.3.0",
+		"eslint": "^8.46.0",
+		"husky": "^8.0.3",
+		"prettier": "^3.0.0",
 		"tsx": "^4.7.1",
 		"typescript": "^5.3.3"
 	}

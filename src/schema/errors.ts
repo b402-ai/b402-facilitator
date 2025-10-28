@@ -44,7 +44,7 @@ export interface ErrorResponse {
 	}
 }
 
-const docErrorUrl = 'https://docs.b402.org/errors'
+const docErrorUrl = 'https://b402.ai'
 
 export class B402ApiError extends Error {
 	public readonly code: ErrorCodes
