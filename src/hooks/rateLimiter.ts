@@ -1,12 +1,13 @@
 import rateLimit from '@fastify/rate-limit'
 import type { FastifyInstance, FastifyPluginOptions, FastifyRequest } from 'fastify'
-import type { VerifyRequest, SettleRequest } from '../schema/b402'
+
+import type { SettleRequest, VerifyRequest } from '../schema/b402'
 
 /**
  * Extract wallet address from request body for rate limiting
- * 
- * @param request 
- * @returns 
+ *
+ * @param request
+ * @returns
  */
 function getWalletAddress(request: FastifyRequest): string | null {
 	try {

@@ -1,12 +1,13 @@
 import type { FastifyInstance } from 'fastify'
+
 import {
-	VerifyRequestSchema,
-	VerifyResponseSchema,
+	HealthResponseSchema,
 	SettleRequestSchema,
 	SettleResponseSchema,
-	HealthResponseSchema
+	VerifyRequestSchema,
+	VerifyResponseSchema
 } from '../../schema/b402'
-import { verify, settle, health } from './b402Controller'
+import { health, settle, verify } from './b402Controller'
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 export const register = (server: FastifyInstance, _: any, next: any) => {

@@ -24,16 +24,16 @@ declare module 'fastify' {
 
 export const envSchema: JSONSchemaType<IEnvSchema> = {
 	type: 'object',
-	required: [
-		'RELAYER_PRIVATE_KEY',
-		'B402_RELAYER_ADDRESS'
-	],
+	required: ['RELAYER_PRIVATE_KEY', 'B402_RELAYER_ADDRESS'],
 	properties: {
 		SERVER_PORT: { type: 'string', default: '3402' },
 		SERVER_HOST: { type: 'string', default: '0.0.0.0' },
 
 		BSC_RPC_URL: { type: 'string', default: 'https://bsc-dataseed.binance.org' },
-		BSC_TESTNET_RPC_URL: { type: 'string', default: 'https://data-seed-prebsc-1-s1.binance.org:8545' },
+		BSC_TESTNET_RPC_URL: {
+			type: 'string',
+			default: 'https://data-seed-prebsc-1-s1.binance.org:8545'
+		},
 
 		NETWORK: { type: 'string', default: 'testnet' },
 
