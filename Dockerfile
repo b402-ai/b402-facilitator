@@ -8,7 +8,7 @@ ENV API_VERSION=$CI_BUILD_VERSION
 # Copy package files
 COPY package*.json ./
 
-# Install ALL dependencies (including dev dependencies needed for build)
+# Install all dependencies
 RUN npm ci
 
 # Copy source code and TypeScript config
