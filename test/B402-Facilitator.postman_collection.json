@@ -1,0 +1,107 @@
+{
+	"info": {
+		"name": "B402 Facilitator API",
+		"description": "API endpoints for B402 payment facilitator service",
+		"schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+	},
+	"item": [
+		{
+			"name": "Health Check",
+			"request": {
+				"method": "GET",
+				"header": [],
+				"url": {
+					"raw": "http://localhost:3402/api/v1/health",
+					"protocol": "http",
+					"host": ["localhost"],
+					"port": "3402",
+					"path": ["api", "v1", "health"]
+				},
+				"description": "Check if the service is running and get configuration info"
+			},
+			"response": []
+		},
+		{
+			"name": "Verify Payment",
+			"request": {
+				"method": "POST",
+				"header": [
+					{
+						"key": "Content-Type",
+						"value": "application/json"
+					}
+				],
+				"body": {
+					"mode": "raw",
+					"raw": "{\n  \"paymentPayload\": {\n    \"token\": \"YOUR_TOKEN_ADDRESS\",\n    \"payload\": {\n      \"authorization\": {\n        \"from\": \"YOUR_WALLET_ADDRESS\",\n        \"to\": \"RELAYER_ADDRESS\",\n        \"value\": \"1000000\",\n        \"validAfter\": 0,\n        \"validBefore\": 1735689600,\n        \"nonce\": \"0x0000000000000000000000000000000000000000000000000000000000000000\"\n      },\n      \"signature\": \"0x...\"\n    }\n  },\n  \"paymentRequirements\": {\n    \"network\": \"testnet\",\n    \"relayerContract\": \"RELAYER_ADDRESS\"\n  }\n}"
+				},
+				"url": {
+					"raw": "http://localhost:3402/api/v1/verify",
+					"protocol": "http",
+					"host": ["localhost"],
+					"port": "3402",
+					"path": ["api", "v1", "verify"]
+				},
+				"description": "Verify a payment authorization signature without executing the transaction"
+			},
+			"response": []
+		},
+		{
+			"name": "Settle Payment",
+			"request": {
+				"method": "POST",
+				"header": [
+					{
+						"key": "Content-Type",
+						"value": "application/json"
+					}
+				],
+				"body": {
+					"mode": "raw",
+					"raw": "{\n  \"paymentPayload\": {\n    \"token\": \"YOUR_TOKEN_ADDRESS\",\n    \"payload\": {\n      \"authorization\": {\n        \"from\": \"YOUR_WALLET_ADDRESS\",\n        \"to\": \"RELAYER_ADDRESS\",\n        \"value\": \"1000000\",\n        \"validAfter\": 0,\n        \"validBefore\": 1735689600,\n        \"nonce\": \"0x0000000000000000000000000000000000000000000000000000000000000000\"\n      },\n      \"signature\": \"0x...\"\n    }\n  },\n  \"paymentRequirements\": {\n    \"network\": \"testnet\",\n    \"relayerContract\": \"RELAYER_ADDRESS\"\n  }\n}"
+				},
+				"url": {
+					"raw": "http://localhost:3402/api/v1/settle",
+					"protocol": "http",
+					"host": ["localhost"],
+					"port": "3402",
+					"path": ["api", "v1", "settle"]
+				},
+				"description": "Execute the payment transaction on-chain (requires gas)"
+			},
+			"response": []
+		},
+		{
+			"name": "Root",
+			"request": {
+				"method": "GET",
+				"header": [],
+				"url": {
+					"raw": "http://localhost:3402/",
+					"protocol": "http",
+					"host": ["localhost"],
+					"port": "3402",
+					"path": [""]
+				},
+				"description": "Root endpoint - returns service name"
+			},
+			"response": []
+		},
+		{
+			"name": "API Version",
+			"request": {
+				"method": "GET",
+				"header": [],
+				"url": {
+					"raw": "http://localhost:3402/api/version",
+					"protocol": "http",
+					"host": ["localhost"],
+					"port": "3402",
+					"path": ["api", "version"]
+				},
+				"description": "Get the API version"
+			},
+			"response": []
+		}
+	]
+}
