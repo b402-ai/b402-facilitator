@@ -11,6 +11,7 @@ const EIP712_DOMAIN = {
 
 const EIP712_TYPES = {
 	TransferWithAuthorization: [
+		{ name: 'token', type: 'address' },
 		{ name: 'from', type: 'address' },
 		{ name: 'to', type: 'address' },
 		{ name: 'value', type: 'uint256' },
@@ -100,6 +101,7 @@ async function checkAndApproveToken(
 async function generateTestSignature() {
 	const privateKey = process.env.TEST_WALLET_PRIVATE_KEY
 	const rpcUrl = process.env.BSC_RPC_URL
+	const liveApiUrl = process.env.LIVE_API_URL
 
 	if (!privateKey) {
 		console.error('❌ Please set TEST_WALLET_PRIVATE_KEY in your .env file')
@@ -111,6 +113,11 @@ async function generateTestSignature() {
 		process.exit(1)
 	}
 
+	if (!liveApiUrl) {
+		console.error('❌ Please set LIVE_API_URL in your .env file')
+		process.exit(1)
+	}
+
 	const wallet = new ethers.Wallet(privateKey)
 	console.log('📝 Wallet Address:', wallet.address)
 
@@ -118,20 +125,23 @@ async function generateTestSignature() {
 		process.env.USD1_TOKEN_ADDRESS || '0x0000000000000000000000000000000000000000'
 	const relayerAddress =
 		process.env.B402_RELAYER_ADDRESS || '0x0000000000000000000000000000000000000000'
+	const recipientAddress = '0x0553B926D6a599CAAc56377042cA6B40dd0b7F4e'
 
 	console.log('💰 Token Address:', tokenAddress)
 	console.log('🔄 Relayer Address:', relayerAddress)
+	console.log('📬 Recipient Address:', recipientAddress)
 
 	await checkAndApproveToken(wallet, tokenAddress, relayerAddress, rpcUrl)
 
 	const nonce = ethers.hexlify(ethers.randomBytes(32))
 	const validAfter = 0
 	const validBefore = Math.floor(Date.now() / 1000) + 3600
-	const amount = '1000000'
+	const amount = '10000000000000000'
 
 	const authorization = {
+		token: tokenAddress,
 		from: wallet.address,
-		to: relayerAddress,
+		to: recipientAddress,
 		value: amount,
 		validAfter: validAfter,
 		validBefore: validBefore,
@@ -167,8 +177,8 @@ async function generateTestSignature() {
 	console.log(JSON.stringify(payload, null, 2))
 
 	console.log('\n🎯 Copy the JSON above and use it in Postman for:')
-	console.log('   - POST http://localhost:3402/api/v1/verify')
-	console.log('   - POST http://localhost:3402/api/v1/settle')
+	console.log(`   - POST ${liveApiUrl}/api/v1/verify`)
+	console.log(`   - POST ${liveApiUrl}/api/v1/settle`)
 }
 
 generateTestSignature().catch(console.error)
