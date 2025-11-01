@@ -46,6 +46,7 @@ export async function verify(request: FastifyRequest, reply: FastifyReply) {
 
 		const types = {
 			TransferWithAuthorization: [
+				{ name: 'token', type: 'address' },
 				{ name: 'from', type: 'address' },
 				{ name: 'to', type: 'address' },
 				{ name: 'value', type: 'uint256' },
@@ -55,9 +56,14 @@ export async function verify(request: FastifyRequest, reply: FastifyReply) {
 			]
 		}
 
+		const message = {
+			token: paymentPayload.token,
+			...authorization
+		}
+
 		let recovered: string
 		try {
-			recovered = ethers.verifyTypedData(domain, types, authorization, signature)
+			recovered = ethers.verifyTypedData(domain, types, message, signature)
 		} catch (error) {
 			throw new BaseErrors.ERR_SIGNATURE_VERIFICATION_FAILED()
 		}
@@ -141,14 +147,6 @@ export async function settle(request: FastifyRequest, reply: FastifyReply) {
 		const signer = relayerWallet.connect(provider)
 		const relayer = new Contract(request.server.config.B402_RELAYER_ADDRESS, B402_ABI, signer)
 
-		// Split signature
-		let sig: ethers.Signature
-		try {
-			sig = ethers.Signature.from(signature)
-		} catch (error) {
-			throw new BaseErrors.ERR_INVALID_SIGNATURE()
-		}
-
 		// Execute transferWithAuthorization
 		let tx: ethers.ContractTransactionResponse
 		try {
@@ -160,9 +158,7 @@ export async function settle(request: FastifyRequest, reply: FastifyReply) {
 				authorization.validAfter,
 				authorization.validBefore,
 				authorization.nonce,
-				sig.v,
-				sig.r,
-				sig.s,
+				signature,
 				{
 					gasLimit: 200000
 				}
