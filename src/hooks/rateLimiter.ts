@@ -34,6 +34,17 @@ export function rateLimiterHook(
 			return walletAddress ? `wallet:${walletAddress}` : `ip:${request.ip}`
 		},
 		allowList: (request: FastifyRequest) => {
+			// Check for admin secret to bypass rate limiting
+			const adminSecret = request.headers['x-admin-secret']
+			const adminSecretValue = Array.isArray(adminSecret) ? adminSecret[0] : adminSecret
+			if (
+				adminSecretValue &&
+				server.config.ADMIN_API_SECRET &&
+				adminSecretValue.toLowerCase() === server.config.ADMIN_API_SECRET.toLowerCase()
+			) {
+				return true
+			}
+
 			// Exclude health check from rate limiting
 			if (request.url.includes('/health')) {
 				return true
