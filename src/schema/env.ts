@@ -14,6 +14,9 @@ interface IEnvSchema {
 	// Relayer configuration
 	RELAYER_PRIVATE_KEY: string
 	B402_RELAYER_ADDRESS: string
+
+	// Admin API secret for bypassing rate limits
+	ADMIN_API_SECRET?: string
 }
 
 declare module 'fastify' {
@@ -38,6 +41,8 @@ export const envSchema: JSONSchemaType<IEnvSchema> = {
 		NETWORK: { type: 'string', default: 'testnet' },
 
 		RELAYER_PRIVATE_KEY: { type: 'string' },
-		B402_RELAYER_ADDRESS: { type: 'string' }
+		B402_RELAYER_ADDRESS: { type: 'string' },
+
+		ADMIN_API_SECRET: { type: 'string', nullable: true }
 	}
 }
