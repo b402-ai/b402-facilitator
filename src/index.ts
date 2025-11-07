@@ -7,6 +7,7 @@ import fastifyPlugin from 'fastify-plugin'
 import { rateLimiterHook } from './hooks/rateLimiter'
 import { register as registerB402 } from './routes/b402/b402Routes'
 import { envSchema } from './schema/env'
+import { initializeProviderService } from './utils/providerService'
 
 const server = fastify({
 	logger: true
@@ -39,6 +40,16 @@ server.register(registerB402, { prefix: '/api/v1' })
 // Initialize and run the server
 async function start() {
 	try {
+		await server.ready()
+
+		initializeProviderService({
+			NETWORK: server.config.NETWORK,
+			BSC_RPC_URL: server.config.BSC_RPC_URL,
+			BSC_TESTNET_RPC_URL: server.config.BSC_TESTNET_RPC_URL
+		})
+
+		server.log.info(`Provider service initialized for network: ${server.config.NETWORK}`)
+
 		await server.listen({
 			port: Number(process.env.SERVER_PORT || 3402),
 			host: process.env.SERVER_HOST || '0.0.0.0'

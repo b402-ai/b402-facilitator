@@ -10,6 +10,7 @@ import type {
 	VerifyResponse
 } from '../../schema/b402'
 import { BaseErrors, handleAndReturnErrorResponse } from '../../schema/errors'
+import { getProviderService } from '../../utils/providerService'
 
 /**
  * Function for route `/verify`
@@ -31,7 +32,9 @@ export async function verify(request: FastifyRequest, reply: FastifyReply) {
 		const { authorization, signature } = paymentPayload.payload
 
 		// Get provider and chain ID
-		const { provider, chainId } = getProviderAndChainId(request.server.config)
+		const providerService = getProviderService()
+		const provider = providerService.getProvider()
+		const chainId = providerService.getChainId()
 
 		// Create relayer contract instance
 		const relayer = new Contract(request.server.config.B402_RELAYER_ADDRESS, B402_ABI, provider)
@@ -139,15 +142,16 @@ export async function settle(request: FastifyRequest, reply: FastifyReply) {
 		const { authorization, signature } = paymentPayload.payload
 		const network = paymentRequirements.network || 'bsc'
 
-		// Get provider and chain ID
-		const { provider } = getProviderAndChainId(request.server.config)
+		// Get provider
+		const providerService = getProviderService()
+		const provider = providerService.getProvider()
 
 		// Create wallet and relayer contract
 		const relayerWallet = new Wallet(request.server.config.RELAYER_PRIVATE_KEY)
 		const signer = relayerWallet.connect(provider)
 		const relayer = new Contract(request.server.config.B402_RELAYER_ADDRESS, B402_ABI, signer)
 
-		// Execute transferWithAuthorization
+		// Execute `transferWithAuthorization`
 		let tx: ethers.ContractTransactionResponse
 		try {
 			tx = await relayer.transferWithAuthorization(
@@ -203,7 +207,8 @@ export async function settle(request: FastifyRequest, reply: FastifyReply) {
 export async function health(request: FastifyRequest, reply: FastifyReply) {
 	try {
 		const relayerWallet = new Wallet(request.server.config.RELAYER_PRIVATE_KEY)
-		const { network } = getProviderAndChainId(request.server.config)
+		const providerService = getProviderService()
+		const network = providerService.getNetwork()
 
 		const response: HealthResponse = {
 			status: 'healthy',
@@ -215,27 +220,4 @@ export async function health(request: FastifyRequest, reply: FastifyReply) {
 	} catch (error) {
 		return handleAndReturnErrorResponse(reply, error)
 	}
-}
-
-// --- Helper functions ---
-
-/**
- * Get provider and chain ID based on environment configuration
- *
- * @param config
- * @returns
- */
-function getProviderAndChainId(config: {
-	NETWORK: string
-	BSC_RPC_URL: string
-	BSC_TESTNET_RPC_URL: string
-}) {
-	const envNetwork = config.NETWORK || 'testnet'
-	const chainId = envNetwork === 'mainnet' ? 56 : 97
-
-	const rpcUrl = envNetwork === 'mainnet' ? config.BSC_RPC_URL : config.BSC_TESTNET_RPC_URL
-
-	const provider = new ethers.JsonRpcProvider(rpcUrl)
-
-	return { provider, chainId, network: envNetwork }
 }
