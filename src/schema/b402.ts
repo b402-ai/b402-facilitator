@@ -159,3 +159,224 @@ export interface HealthResponse {
 	network: string
 	relayer: string
 }
+
+// ============================================================================
+// Smart Wallet Schemas
+// ============================================================================
+
+// POST /wallet/create - Request
+export const CreateWalletRequestSchema = {
+	type: 'object',
+	properties: {
+		ownerAddress: { type: 'string' }
+	},
+	required: ['ownerAddress'],
+	additionalProperties: false
+} as const
+
+// POST /wallet/create - Response
+export const CreateWalletResponseSchema = {
+	type: 'object',
+	properties: {
+		walletAddress: { type: 'string' },
+		txHash: { type: 'string' }
+	},
+	required: ['walletAddress', 'txHash'],
+	additionalProperties: false
+} as const
+
+// Transaction schema for batch payments
+export const TransactionSchema = {
+	type: 'object',
+	properties: {
+		to: { type: 'string' },
+		amount: { type: 'string' },
+		token: { type: 'string' }
+	},
+	required: ['to', 'amount', 'token'],
+	additionalProperties: false
+} as const
+
+// POST /wallet/verify - Request
+export const VerifyWalletPaymentRequestSchema = {
+	type: 'object',
+	properties: {
+		walletAddress: { type: 'string' },
+		transactions: {
+			type: 'array',
+			items: TransactionSchema,
+			minItems: 1
+		}
+	},
+	required: ['walletAddress', 'transactions'],
+	additionalProperties: false
+} as const
+
+// POST /wallet/verify - Response
+export const VerifyWalletPaymentResponseSchema = {
+	type: 'object',
+	properties: {
+		userOp: {
+			type: 'object',
+			properties: {
+				sender: { type: 'string' },
+				nonce: { type: 'string' },
+				initCode: { type: 'string' },
+				callData: { type: 'string' },
+				callGasLimit: { type: 'string' },
+				verificationGasLimit: { type: 'string' },
+				preVerificationGas: { type: 'string' },
+				maxFeePerGas: { type: 'string' },
+				maxPriorityFeePerGas: { type: 'string' },
+				paymasterAndData: { type: 'string' },
+				signature: { type: 'string' }
+			},
+			required: [
+				'sender',
+				'nonce',
+				'initCode',
+				'callData',
+				'callGasLimit',
+				'verificationGasLimit',
+				'preVerificationGas',
+				'maxFeePerGas',
+				'maxPriorityFeePerGas',
+				'paymasterAndData',
+				'signature'
+			],
+			additionalProperties: false
+		},
+		userOpHash: { type: 'string' },
+		feeAmount: { type: 'string' },
+		totalAmount: { type: 'string' }
+	},
+	required: ['userOp', 'userOpHash', 'feeAmount', 'totalAmount'],
+	additionalProperties: false
+} as const
+
+// POST /wallet/settle - Request
+export const SettleWalletPaymentRequestSchema = {
+	type: 'object',
+	properties: {
+		userOp: {
+			type: 'object',
+			properties: {
+				sender: { type: 'string' },
+				nonce: { type: 'string' },
+				initCode: { type: 'string' },
+				callData: { type: 'string' },
+				callGasLimit: { type: 'string' },
+				verificationGasLimit: { type: 'string' },
+				preVerificationGas: { type: 'string' },
+				maxFeePerGas: { type: 'string' },
+				maxPriorityFeePerGas: { type: 'string' },
+				paymasterAndData: { type: 'string' },
+				signature: { type: 'string' }
+			},
+			required: [
+				'sender',
+				'nonce',
+				'initCode',
+				'callData',
+				'callGasLimit',
+				'verificationGasLimit',
+				'preVerificationGas',
+				'maxFeePerGas',
+				'maxPriorityFeePerGas',
+				'paymasterAndData',
+				'signature'
+			],
+			additionalProperties: false
+		},
+		signature: { type: 'string' }
+	},
+	required: ['userOp', 'signature'],
+	additionalProperties: false
+} as const
+
+// Payment detail schema
+export const PaymentDetailSchema = {
+	type: 'object',
+	properties: {
+		recipient: { type: 'string' },
+		amount: { type: 'string' },
+		isProtocolFee: { type: 'boolean' }
+	},
+	required: ['recipient', 'amount', 'isProtocolFee'],
+	additionalProperties: false
+} as const
+
+// POST /wallet/settle - Response
+export const SettleWalletPaymentResponseSchema = {
+	type: 'object',
+	properties: {
+		txHash: { type: 'string' },
+		userOpHash: { type: 'string' },
+		payments: {
+			type: 'array',
+			items: PaymentDetailSchema,
+			minItems: 1
+		}
+	},
+	required: ['txHash', 'userOpHash', 'payments'],
+	additionalProperties: false
+} as const
+
+// TypeScript interfaces for wallet endpoints
+export interface CreateWalletRequest {
+	ownerAddress: string
+}
+
+export interface CreateWalletResponse {
+	walletAddress: string
+	txHash: string
+}
+
+export interface Transaction {
+	to: string
+	amount: string
+	token: string
+}
+
+export interface VerifyWalletPaymentRequest {
+	walletAddress: string
+	transactions: Transaction[]
+}
+
+export interface UserOperation {
+	sender: string
+	nonce: string
+	initCode: string
+	callData: string
+	callGasLimit: string
+	verificationGasLimit: string
+	preVerificationGas: string
+	maxFeePerGas: string
+	maxPriorityFeePerGas: string
+	paymasterAndData: string
+	signature: string
+}
+
+export interface VerifyWalletPaymentResponse {
+	userOp: UserOperation
+	userOpHash: string
+	feeAmount: string
+	totalAmount: string
+}
+
+export interface SettleWalletPaymentRequest {
+	userOp: UserOperation
+	signature: string
+}
+
+export interface PaymentDetail {
+	recipient: string
+	amount: string
+	isProtocolFee: boolean
+}
+
+export interface SettleWalletPaymentResponse {
+	txHash: string
+	userOpHash: string
+	payments: PaymentDetail[]
+}

@@ -1,5 +1,7 @@
 import { type JsonRpcProvider, ethers } from 'ethers'
 
+import { BaseErrors } from '../schema/errors'
+
 export class ProviderService {
 	private provider: JsonRpcProvider
 	private chainId: number
@@ -46,7 +48,7 @@ export function initializeProviderService(config: {
 
 export function getProviderService(): ProviderService {
 	if (!providerServiceInstance) {
-		throw new Error('ProviderService not initialized. Call initializeProviderService first.')
+		throw new BaseErrors.ERR_PROVIDER_NOT_INITIALIZED()
 	}
 	return providerServiceInstance
 }

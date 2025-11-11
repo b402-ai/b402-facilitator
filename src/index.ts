@@ -7,7 +7,7 @@ import fastifyPlugin from 'fastify-plugin'
 import { rateLimiterHook } from './hooks/rateLimiter'
 import { register as registerB402 } from './routes/b402/b402Routes'
 import { envSchema } from './schema/env'
-import { initializeProviderService } from './utils/providerService'
+import { initializeProviderService } from './utils/provider'
 
 const server = fastify({
 	logger: true
@@ -34,8 +34,8 @@ server.get('/api/version', async () => ({
 	apiVersion: 1
 }))
 
-// Register B402 Routes
-server.register(registerB402, { prefix: '/api/v1' })
+// Register B402 Routes (includes wallet routes at /api/v1/b402/wallet/*)
+server.register(registerB402, { prefix: '/api/v1/b402' })
 
 // Initialize and run the server
 async function start() {
