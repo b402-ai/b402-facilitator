@@ -35,7 +35,7 @@ server.get('/api/version', async () => ({
 }))
 
 // Register B402 Routes
-server.register(registerB402, { prefix: '/api/v1/b402' })
+server.register(registerB402, { prefix: '/api/v1' })
 
 // Initialize and run the server
 async function start() {

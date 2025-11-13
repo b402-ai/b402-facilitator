@@ -105,65 +105,6 @@ export const HealthResponseSchema = {
 	additionalProperties: false
 } as const
 
-// TypeScript interfaces
-export interface Authorization {
-	from: string
-	to: string
-	value: string
-	validAfter: number
-	validBefore: number
-	nonce: string
-}
-
-export interface PaymentPayload {
-	token: string
-	payload: {
-		authorization: Authorization
-		signature: string
-	}
-}
-
-export interface PaymentRequirements {
-	network: string
-	relayerContract: string
-}
-
-export interface VerifyRequest {
-	paymentPayload: PaymentPayload
-	paymentRequirements: PaymentRequirements
-}
-
-export interface VerifyResponse {
-	isValid: boolean
-	payer?: string
-	invalidReason?: string
-}
-
-export interface SettleRequest {
-	paymentPayload: PaymentPayload
-	paymentRequirements: PaymentRequirements
-}
-
-export interface SettleResponse {
-	success: boolean
-	transaction?: string
-	network: string
-	payer?: string
-	blockNumber?: number
-	errorReason?: string
-}
-
-export interface HealthResponse {
-	status: string
-	service: string
-	network: string
-	relayer: string
-}
-
-// ============================================================================
-// Smart Wallet Schemas
-// ============================================================================
-
 // Transaction schema for batch payments
 export const TransactionSchema = {
 	type: 'object',
@@ -397,4 +338,59 @@ export interface SettleWalletResponse {
 	network: string
 	payments: PaymentDetail[]
 	errorReason?: string
+}
+
+// TypeScript interfaces
+export interface Authorization {
+	from: string
+	to: string
+	value: string
+	validAfter: number
+	validBefore: number
+	nonce: string
+}
+
+export interface PaymentPayload {
+	token: string
+	payload: {
+		authorization: Authorization
+		signature: string
+	}
+}
+
+export interface PaymentRequirements {
+	network: string
+	relayerContract: string
+}
+
+export interface VerifyRequest {
+	paymentPayload: PaymentPayload
+	paymentRequirements: PaymentRequirements
+}
+
+export interface VerifyResponse {
+	isValid: boolean
+	payer?: string
+	invalidReason?: string
+}
+
+export interface SettleRequest {
+	paymentPayload: PaymentPayload
+	paymentRequirements: PaymentRequirements
+}
+
+export interface SettleResponse {
+	success: boolean
+	transaction?: string
+	network: string
+	payer?: string
+	blockNumber?: number
+	errorReason?: string
+}
+
+export interface HealthResponse {
+	status: string
+	service: string
+	network: string
+	relayer: string
 }
