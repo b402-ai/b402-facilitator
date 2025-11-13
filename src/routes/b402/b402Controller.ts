@@ -3,32 +3,29 @@ import type { FastifyReply, FastifyRequest } from 'fastify'
 
 import { B402_RELAYER_ABI, SUPPORTED_TOKENS } from '../../constants'
 import type {
-	CreateWalletRequest,
-	CreateWalletResponse,
 	HealthResponse,
 	SettleRequest,
 	SettleResponse,
-	SettleWalletPaymentRequest,
-	SettleWalletPaymentResponse,
+	SettleWalletRequest,
+	SettleWalletResponse,
 	UserOperation,
 	VerifyRequest,
 	VerifyResponse,
-	VerifyWalletPaymentRequest,
-	VerifyWalletPaymentResponse
+	VerifyWalletRequest,
+	VerifyWalletResponse
 } from '../../schema/b402'
 import { env } from '../../schema/env'
 import { BaseErrors, handleAndReturnErrorResponse } from '../../schema/errors'
 import { getUserOpHash, signUserOp } from '../../utils/paymaster'
 import { getProviderService } from '../../utils/provider'
 import {
-	createDeploymentUserOp,
 	createPaymentUserOpOrThrow,
 	decodeExecuteBatch,
 	getUserOpReceipt,
 	submitUserOpToBundler,
 	validateFeeIncluded
 } from '../../utils/userOp'
-import { computeWalletAddress, getTokenBalance, isWalletDeployed } from '../../utils/wallet'
+import { getTokenBalance } from '../../utils/wallet'
 
 /**
  * Function for route `/verify`
@@ -223,113 +220,6 @@ export async function settle(request: FastifyRequest, reply: FastifyReply) {
 }
 
 /**
- * Function for route `/health`
- * Health check endpoint returning service status and relayer info
- *
- * @param request
- * @param reply
- * @returns
- */
-export async function health(request: FastifyRequest, reply: FastifyReply) {
-	try {
-		const relayerWallet = new Wallet(request.server.config.RELAYER_PRIVATE_KEY)
-		const providerService = getProviderService()
-		const network = providerService.getNetwork()
-
-		const response: HealthResponse = {
-			status: 'healthy',
-			service: 'b402-facilitator',
-			network,
-			relayer: relayerWallet.address
-		}
-		return response
-	} catch (error) {
-		return handleAndReturnErrorResponse(reply, error)
-	}
-}
-
-/**
- * Function for route `/wallet/create`
- * Create and deploy a smart wallet
- *
- * @param request
- * @param reply
- * @returns
- */
-export async function createWallet(request: FastifyRequest, reply: FastifyReply) {
-	try {
-		const body = request.body as CreateWalletRequest
-
-		if (!body.ownerAddress || !ethers.isAddress(body.ownerAddress)) {
-			throw new BaseErrors.ERR_INVALID_ADDRESS()
-		}
-
-		// Compute wallet address
-		const walletAddress = await computeWalletAddress(body.ownerAddress)
-
-		// Check if already deployed
-		const deployed = await isWalletDeployed(walletAddress)
-		if (deployed) {
-			throw new BaseErrors.ERR_WALLET_ALREADY_DEPLOYED()
-		}
-
-		// Create deployment UserOp
-		let userOp: UserOperation
-		try {
-			userOp = await createDeploymentUserOp(body.ownerAddress)
-		} catch (error) {
-			throw new BaseErrors.ERR_USEROP_CREATION_FAILED()
-		}
-
-		// Sign with paymaster
-		const chainId = env.NETWORK === 'testnet' ? 97 : 56
-		let paymasterAndData: string
-		try {
-			paymasterAndData = await signUserOp(userOp, chainId)
-		} catch (error) {
-			throw new BaseErrors.ERR_PAYMASTER_SIGNING_FAILED()
-		}
-		userOp.paymasterAndData = paymasterAndData
-
-		// Submit to bundler
-		let userOpHash: string
-		try {
-			userOpHash = await submitUserOpToBundler(userOp)
-		} catch (error) {
-			throw new BaseErrors.ERR_BUNDLER_SUBMISSION_FAILED()
-		}
-
-		// Wait for receipt (with timeout)
-		let txHash = ''
-		try {
-			for (let i = 0; i < 30; i++) {
-				await new Promise((resolve) => setTimeout(resolve, 1000))
-				try {
-					const receipt = await getUserOpReceipt(userOpHash)
-					if (receipt.success) {
-						txHash = receipt.txHash
-						break
-					}
-				} catch {
-					// Receipt not available yet
-				}
-			}
-		} catch (error) {
-			console.error('Error waiting for receipt:', error)
-		}
-
-		const response: CreateWalletResponse = {
-			walletAddress,
-			txHash: txHash || userOpHash
-		}
-
-		return response
-	} catch (error) {
-		return handleAndReturnErrorResponse(reply, error)
-	}
-}
-
-/**
  * Function for route `/wallet/verify`
  * Build UserOp with fee injection and return for user signing
  *
@@ -339,9 +229,9 @@ export async function createWallet(request: FastifyRequest, reply: FastifyReply)
  */
 export async function verifyWalletPayment(request: FastifyRequest, reply: FastifyReply) {
 	try {
-		const body = request.body as VerifyWalletPaymentRequest
+		const body = request.body as VerifyWalletRequest
 
-		// Validate that all transactions use the same token (API-level constraint)
+		// Validate that all transactions use the same token
 		if (!body.transactions || body.transactions.length === 0) {
 			throw new BaseErrors.ERR_EMPTY_TRANSACTIONS()
 		}
@@ -353,7 +243,7 @@ export async function verifyWalletPayment(request: FastifyRequest, reply: Fastif
 			throw new BaseErrors.ERR_MULTIPLE_TOKENS_NOT_ALLOWED()
 		}
 
-		// Verify token is supported (for fee and balance calculations)
+		// Validate token is supported
 		const tokenConfig = Object.values(SUPPORTED_TOKENS).find(
 			(t) => t.address.toLowerCase() === firstToken.toLowerCase()
 		)
@@ -361,16 +251,13 @@ export async function verifyWalletPayment(request: FastifyRequest, reply: Fastif
 			throw new BaseErrors.ERR_UNSUPPORTED_TOKEN()
 		}
 
-		// Extract recipients and amounts
+		// Create payment UserOp with fee injection
 		const recipients = body.transactions.map((tx) => tx.to)
 		const amounts = body.transactions.map((tx) => tx.amount)
-
-		// Generate timing and nonce for the batch transfer
 		const validAfter = Math.floor(Date.now() / 1000) - 3600 // Valid from 1 hour ago
 		const validBefore = Math.floor(Date.now() / 1000) + 3600 // Valid for 1 hour
 		const nonce = ethers.hexlify(ethers.randomBytes(32))
 
-		// Create payment UserOp with fee injection
 		let userOp: UserOperation
 		try {
 			userOp = await createPaymentUserOpOrThrow({
@@ -386,24 +273,30 @@ export async function verifyWalletPayment(request: FastifyRequest, reply: Fastif
 			throw new BaseErrors.ERR_USEROP_CREATION_FAILED()
 		}
 
-		// Calculate proper ERC-4337 v0.7 userOpHash
-		const chainId = env.NETWORK === 'mainnet' ? 56 : 97 // BSC mainnet: 56, testnet: 97
+		const chainId = env.NETWORK === 'mainnet' ? 56 : 97
+		const paymasterData = await signUserOp(userOp, chainId)
+		userOp.paymaster = paymasterData.paymaster
+		userOp.paymasterVerificationGasLimit = paymasterData.paymasterVerificationGasLimit
+		userOp.paymasterPostOpGasLimit = paymasterData.paymasterPostOpGasLimit
+		userOp.paymasterData = paymasterData.paymasterData
+
 		const userOpHash = await getUserOpHash(userOp, env.ENTRY_POINT_ADDRESS, chainId)
 
-		// Calculate amounts
 		const paymentAmounts = amounts.map((amt) => ethers.parseUnits(amt, tokenConfig.decimals))
 		const totalPaymentAmount = paymentAmounts.reduce((sum, amt) => sum + amt, 0n)
 		const feeAmount = ethers.parseUnits(env.WALLET_FEE_AMOUNT, tokenConfig.decimals)
 		const totalAmount = totalPaymentAmount + feeAmount
 
-		// Check wallet has sufficient balance
+		// Validate wallet has sufficient balance
 		const balanceStr = await getTokenBalance(body.walletAddress, firstToken)
 		const balance = BigInt(balanceStr)
 		if (balance < totalAmount) {
 			throw new BaseErrors.ERR_INSUFFICIENT_BALANCE()
 		}
 
-		const response: VerifyWalletPaymentResponse = {
+		const response: VerifyWalletResponse = {
+			isValid: true,
+			payer: body.walletAddress,
 			userOp,
 			userOpHash,
 			feeAmount: ethers.formatUnits(feeAmount, tokenConfig.decimals),
@@ -426,7 +319,7 @@ export async function verifyWalletPayment(request: FastifyRequest, reply: Fastif
  */
 export async function settleWalletPayment(request: FastifyRequest, reply: FastifyReply) {
 	try {
-		const body = request.body as SettleWalletPaymentRequest
+		const body = request.body as SettleWalletRequest
 
 		// Validate fee is included
 		const hasFee = validateFeeIncluded(body.userOp)
@@ -434,20 +327,8 @@ export async function settleWalletPayment(request: FastifyRequest, reply: Fastif
 			throw new BaseErrors.ERR_FEE_VALIDATION_FAILED()
 		}
 
-		// Add user signature
-		body.userOp.signature = body.signature
-
-		// Sign with paymaster
-		const chainId = env.NETWORK === 'testnet' ? 97 : 56
-		let paymasterAndData: string
-		try {
-			paymasterAndData = await signUserOp(body.userOp, chainId)
-		} catch (error) {
-			throw new BaseErrors.ERR_PAYMASTER_SIGNING_FAILED()
-		}
-		body.userOp.paymasterAndData = paymasterAndData
-
 		// Submit to bundler
+		body.userOp.signature = body.signature
 		let userOpHash: string
 		try {
 			userOpHash = await submitUserOpToBundler(body.userOp)
@@ -459,7 +340,7 @@ export async function settleWalletPayment(request: FastifyRequest, reply: Fastif
 		let txHash = ''
 		try {
 			for (let i = 0; i < 30; i++) {
-				await new Promise((resolve) => setTimeout(resolve, 1000))
+				await new Promise((resolve) => setTimeout(resolve, 1500))
 				try {
 					const receipt = await getUserOpReceipt(userOpHash)
 					if (receipt.success) {
@@ -471,14 +352,14 @@ export async function settleWalletPayment(request: FastifyRequest, reply: Fastif
 				}
 			}
 		} catch (error) {
-			console.error('Error waiting for receipt:', error)
+			console.log('Error waiting for receipt:', error)
 		}
 
 		if (!txHash) {
 			throw new BaseErrors.ERR_TRANSACTION_CONFIRMATION_FAILED()
 		}
 
-		// Extract payment details from userOp
+		// Extract payment details
 		const calls = decodeExecuteBatch(body.userOp.callData)
 		const batchTransferCall = calls.find(
 			(call) => call.to.toLowerCase() === env.B402_RELAYER_ADDRESS.toLowerCase()
@@ -506,19 +387,50 @@ export async function settleWalletPayment(request: FastifyRequest, reply: Fastif
 			throw new BaseErrors.ERR_UNSUPPORTED_TOKEN()
 		}
 
-		// Build payment details array
+		// Build payment details
 		const payments = recipients.map((recipient, i) => ({
 			recipient,
 			amount: ethers.formatUnits(amounts[i], tokenConfig.decimals),
 			isProtocolFee: recipient.toLowerCase() === env.WALLET_FEE_RECIPIENT.toLowerCase()
 		}))
 
-		const response: SettleWalletPaymentResponse = {
+		const providerService = getProviderService()
+		const network = providerService.getNetwork()
+
+		const response: SettleWalletResponse = {
+			success: true,
 			txHash,
 			userOpHash,
+			network,
 			payments
 		}
 
+		return response
+	} catch (error) {
+		return handleAndReturnErrorResponse(reply, error)
+	}
+}
+
+/**
+ * Function for route `/health`
+ * Health check endpoint returning service status and relayer info
+ *
+ * @param request
+ * @param reply
+ * @returns
+ */
+export async function health(request: FastifyRequest, reply: FastifyReply) {
+	try {
+		const relayerWallet = new Wallet(request.server.config.RELAYER_PRIVATE_KEY)
+		const providerService = getProviderService()
+		const network = providerService.getNetwork()
+
+		const response: HealthResponse = {
+			status: 'healthy',
+			service: 'b402-facilitator',
+			network,
+			relayer: relayerWallet.address
+		}
 		return response
 	} catch (error) {
 		return handleAndReturnErrorResponse(reply, error)

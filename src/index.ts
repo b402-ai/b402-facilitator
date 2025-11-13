@@ -34,7 +34,7 @@ server.get('/api/version', async () => ({
 	apiVersion: 1
 }))
 
-// Register B402 Routes (includes wallet routes at /api/v1/b402/wallet/*)
+// Register B402 Routes
 server.register(registerB402, { prefix: '/api/v1/b402' })
 
 // Initialize and run the server

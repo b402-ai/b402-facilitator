@@ -4,13 +4,7 @@ import { B402_RELAYER_ABI, SUPPORTED_TOKENS } from '../constants'
 import { env } from '../schema/env'
 import { BaseErrors } from '../schema/errors'
 import type { BatchCall, UserOperationParams } from '../types/wallet'
-import {
-	getFactoryContract,
-	getProvider,
-	getTokenAllowance,
-	getWalletNonce,
-	isWalletDeployed
-} from './wallet'
+import { getProvider, getTokenAllowance, getWalletNonce, isWalletDeployed } from './wallet'
 
 const SIMPLE_ACCOUNT_ABI = [
 	'function execute(address dest, uint256 value, bytes calldata func)',
@@ -51,50 +45,6 @@ export function decodeExecuteBatch(callData: string): BatchCall[] {
 		value: values[i].toString(),
 		data: funcs[i]
 	}))
-}
-
-async function getInitCode(ownerAddress: string, salt = 0): Promise<string> {
-	const factory = getFactoryContract()
-	const factoryAddress = await factory.getAddress()
-
-	const iface = new ethers.Interface([
-		'function createAccount(address owner, uint256 salt) returns (address)'
-	])
-
-	const createAccountData = iface.encodeFunctionData('createAccount', [ownerAddress, salt])
-	return factoryAddress + createAccountData.slice(2) // Remove '0x' from calldata
-}
-
-export async function createDeploymentUserOp(
-	ownerAddress: string,
-	salt = 0
-): Promise<UserOperationParams> {
-	const provider = getProvider()
-
-	const factory = getFactoryContract()
-	const walletAddress = await factory.getFunction('getAddress')(ownerAddress, salt)
-	const initCode = await getInitCode(ownerAddress, salt)
-	const callData = '0x'
-
-	const feeData = await provider.getFeeData()
-	const maxFeePerGas = feeData.maxFeePerGas || ethers.parseUnits('5', 'gwei')
-	const maxPriorityFeePerGas = feeData.maxPriorityFeePerGas || ethers.parseUnits('1', 'gwei')
-
-	const userOp: UserOperationParams = {
-		sender: walletAddress,
-		nonce: '0', // First nonce
-		initCode,
-		callData,
-		callGasLimit: '100000',
-		verificationGasLimit: '500000',
-		preVerificationGas: '50000',
-		maxFeePerGas: maxFeePerGas.toString(),
-		maxPriorityFeePerGas: maxPriorityFeePerGas.toString(),
-		paymasterAndData: '0x', // Will be filled by paymaster service
-		signature: '0x' // Will be filled by user
-	}
-
-	return userOp
 }
 
 export async function createPaymentUserOpOrThrow(params: {
@@ -219,20 +169,25 @@ export async function createPaymentUserOpOrThrow(params: {
 	const nonce = await getWalletNonce(walletAddress)
 
 	const feeData = await provider.getFeeData()
-	const maxFeePerGas = feeData.maxFeePerGas || ethers.parseUnits('5', 'gwei')
-	const maxPriorityFeePerGas = feeData.maxPriorityFeePerGas || ethers.parseUnits('1', 'gwei')
+	const baseGasPrice = feeData.gasPrice || ethers.parseUnits('0.1', 'gwei')
+	const maxFeePerGas = (baseGasPrice * 12n) / 10n
+	const maxPriorityFeePerGas = ethers.parseUnits('0.4', 'gwei')
 
 	const userOp: UserOperationParams = {
 		sender: walletAddress,
-		nonce: nonce.toString(),
-		initCode: '0x', // Wallet should be deployed already
+		nonce: ethers.toBeHex(nonce),
+		factory: undefined,
+		factoryData: undefined,
 		callData,
-		callGasLimit: '300000', // Higher for batch execution
-		verificationGasLimit: '500000',
-		preVerificationGas: '50000',
-		maxFeePerGas: maxFeePerGas.toString(),
-		maxPriorityFeePerGas: maxPriorityFeePerGas.toString(),
-		paymasterAndData: '0x', // Will be filled by paymaster service
+		callGasLimit: ethers.toBeHex(1000000),
+		verificationGasLimit: ethers.toBeHex(1000000),
+		preVerificationGas: ethers.toBeHex(150000),
+		maxFeePerGas: ethers.toBeHex(maxFeePerGas),
+		maxPriorityFeePerGas: ethers.toBeHex(maxPriorityFeePerGas),
+		paymaster: undefined,
+		paymasterVerificationGasLimit: undefined,
+		paymasterPostOpGasLimit: undefined,
+		paymasterData: undefined,
 		signature: '0x' // Will be filled by user
 	}
 
@@ -243,7 +198,6 @@ export function validateFeeIncluded(userOp: UserOperationParams): boolean {
 	try {
 		const calls = decodeExecuteBatch(userOp.callData)
 		const hasBatchTransferWithFee = calls.some((call) => {
-			// Must be calling the relayer contract
 			if (call.to.toLowerCase() !== env.B402_RELAYER_ADDRESS.toLowerCase()) {
 				return false
 			}
@@ -252,22 +206,25 @@ export function validateFeeIncluded(userOp: UserOperationParams): boolean {
 				const iface = new ethers.Interface(B402_RELAYER_ABI)
 				const decoded = iface.decodeFunctionData('batchTransferWithUserOp', call.data)
 
-				// batchTransferWithUserOp(token, recipients[], amounts[], validAfter, validBefore, nonce)
 				// [0] = token, [1] = recipients array, [2] = amounts array
+				const token = decoded[0] as string
 				const recipients = decoded[1] as string[]
 				const amounts = decoded[2] as bigint[]
 
-				// Check if fee recipient is in the recipients array
 				const feeRecipientIndex = recipients.findIndex(
 					(r) => r.toLowerCase() === env.WALLET_FEE_RECIPIENT.toLowerCase()
 				)
-
 				if (feeRecipientIndex === -1) return false
 
-				// Check if fee amount is sufficient
+				// Get token decimals
+				const tokenConfig = Object.values(SUPPORTED_TOKENS).find(
+					(t) => t.address.toLowerCase() === token.toLowerCase()
+				)
+				if (!tokenConfig) return false
+
 				const feeAmount = amounts[feeRecipientIndex]
-				const minFee = ethers.parseUnits('0.05', 18)
-				return feeAmount >= minFee
+				const expectedFee = ethers.parseUnits(env.WALLET_FEE_AMOUNT, tokenConfig.decimals)
+				return feeAmount === expectedFee
 			} catch {
 				return false
 			}
@@ -275,9 +232,65 @@ export function validateFeeIncluded(userOp: UserOperationParams): boolean {
 
 		return hasBatchTransferWithFee
 	} catch (error) {
-		console.error('Error validating fee:', error)
+		console.log('Error validating fee:', error)
 		return false
 	}
+}
+
+// TODO: Consider using gas estimation after building a valid UserOp to refine the final estimate
+export async function estimateUserOpGas(userOp: UserOperationParams): Promise<{
+	callGasLimit: string
+	verificationGasLimit: string
+	preVerificationGas: string
+}> {
+	const response = await fetch(env.BUNDLER_RPC_URL, {
+		method: 'POST',
+		headers: {
+			'Content-Type': 'application/json'
+		},
+		body: JSON.stringify({
+			jsonrpc: '2.0',
+			id: 1,
+			method: 'eth_estimateUserOperationGas',
+			params: [userOp, env.ENTRY_POINT_ADDRESS]
+		})
+	})
+
+	const responseText = await response.text()
+
+	if (!response.ok) {
+		console.log('Gas estimation failed with status:', response.status)
+		console.log('Response text:', responseText)
+		throw new BaseErrors.ERR_GAS_ESTIMATION_FAILED()
+	}
+
+	let result: {
+		error?: { message: string; data?: unknown }
+		result?: {
+			callGasLimit: string
+			verificationGasLimit: string
+			preVerificationGas: string
+		}
+	}
+
+	try {
+		result = JSON.parse(responseText)
+	} catch (error) {
+		console.log('Failed to parse gas estimation response as JSON')
+		console.log('Response text:', responseText.substring(0, 500))
+		throw new BaseErrors.ERR_GAS_ESTIMATION_PARSE_FAILED()
+	}
+
+	if (result.error) {
+		console.log('Gas estimation returned error:', JSON.stringify(result.error, null, 2))
+		throw new BaseErrors.ERR_GAS_ESTIMATION_ERROR()
+	}
+
+	if (!result.result) {
+		throw new BaseErrors.ERR_GAS_ESTIMATION_NO_RESULT()
+	}
+
+	return result.result
 }
 
 export async function submitUserOpToBundler(userOp: UserOperationParams): Promise<string> {
@@ -294,16 +307,30 @@ export async function submitUserOpToBundler(userOp: UserOperationParams): Promis
 		})
 	})
 
+	const responseText = await response.text()
+
 	if (!response.ok) {
+		console.log('Bundler request failed with status:', response.status)
+		console.log('Response text:', responseText)
 		throw new BaseErrors.ERR_BUNDLER_REQUEST_FAILED()
 	}
 
-	const result = (await response.json()) as {
-		error?: { message: string }
+	let result: {
+		error?: { message: string; data?: unknown }
 		result?: string
 	}
 
+	try {
+		result = JSON.parse(responseText)
+	} catch (error) {
+		console.log('Failed to parse bundler response as JSON')
+		console.log('Response text:', responseText.substring(0, 500))
+		throw new BaseErrors.ERR_BUNDLER_REQUEST_FAILED()
+	}
+
 	if (result.error) {
+		console.log('Bundler returned error:', JSON.stringify(result.error, null, 2))
+		console.log('UserOp that failed:', JSON.stringify(userOp, null, 2))
 		throw new BaseErrors.ERR_BUNDLER_ERROR()
 	}
 

@@ -361,6 +361,24 @@ const errorCodesConfig = {
 	ERR_MISSING_ENV_VARS: {
 		code: 'configuration_error' as const,
 		message: 'Missing required environment variables'
+	},
+
+	// Gas estimation errors
+	ERR_GAS_ESTIMATION_FAILED: {
+		code: 'userp_error' as const,
+		message: 'Gas estimation failed'
+	},
+	ERR_GAS_ESTIMATION_PARSE_FAILED: {
+		code: 'userp_error' as const,
+		message: 'Failed to parse gas estimation response'
+	},
+	ERR_GAS_ESTIMATION_ERROR: {
+		code: 'userp_error' as const,
+		message: 'Gas estimation returned an error'
+	},
+	ERR_GAS_ESTIMATION_NO_RESULT: {
+		code: 'userp_error' as const,
+		message: 'Gas estimation returned no result'
 	}
 } as const
 

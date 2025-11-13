@@ -1,8 +1,6 @@
 import type { FastifyInstance } from 'fastify'
 
 import {
-	CreateWalletRequestSchema,
-	CreateWalletResponseSchema,
 	HealthResponseSchema,
 	SettleRequestSchema,
 	SettleResponseSchema,
@@ -13,14 +11,7 @@ import {
 	VerifyWalletPaymentRequestSchema,
 	VerifyWalletPaymentResponseSchema
 } from '../../schema/b402'
-import {
-	createWallet,
-	health,
-	settle,
-	settleWalletPayment,
-	verify,
-	verifyWalletPayment
-} from './b402Controller'
+import { health, settle, settleWalletPayment, verify, verifyWalletPayment } from './b402Controller'
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 export const register = (server: FastifyInstance, _: any, next: any) => {
@@ -50,32 +41,7 @@ export const register = (server: FastifyInstance, _: any, next: any) => {
 		settle
 	)
 
-	server.get(
-		'/health',
-		{
-			schema: {
-				response: {
-					200: HealthResponseSchema
-				}
-			}
-		},
-		health
-	)
-
 	// Smart Wallet Routes
-	server.post(
-		'/wallet/create',
-		{
-			schema: {
-				body: CreateWalletRequestSchema,
-				response: {
-					200: CreateWalletResponseSchema
-				}
-			}
-		},
-		createWallet
-	)
-
 	server.post(
 		'/wallet/verify',
 		{
@@ -100,6 +66,18 @@ export const register = (server: FastifyInstance, _: any, next: any) => {
 			}
 		},
 		settleWalletPayment
+	)
+
+	server.get(
+		'/health',
+		{
+			schema: {
+				response: {
+					200: HealthResponseSchema
+				}
+			}
+		},
+		health
 	)
 
 	next()

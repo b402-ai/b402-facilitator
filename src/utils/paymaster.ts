@@ -5,67 +5,89 @@ import { BaseErrors } from '../schema/errors'
 import type { UserOperationParams } from '../types/wallet'
 import { validateFeeIncluded } from './userOp'
 
-function packUserOp(userOp: UserOperationParams): string {
-	const abiCoder = ethers.AbiCoder.defaultAbiCoder()
-
-	return abiCoder.encode(
-		[
-			'address', // sender
-			'uint256', // nonce
-			'bytes32', // initCode hash
-			'bytes32', // callData hash
-			'bytes32', // accountGasLimits
-			'uint256', // preVerificationGas
-			'bytes32', // gasFees
-			'bytes32' // paymasterAndData hash
-		],
-		[
-			userOp.sender,
-			userOp.nonce,
-			ethers.keccak256(userOp.initCode),
-			ethers.keccak256(userOp.callData),
-			// accountGasLimits = (verificationGasLimit << 128) | callGasLimit
-			ethers.solidityPacked(
-				['uint128', 'uint128'],
-				[BigInt(userOp.verificationGasLimit), BigInt(userOp.callGasLimit)]
-			),
-			userOp.preVerificationGas,
-			// gasFees = (maxPriorityFeePerGas << 128) | maxFeePerGas
-			ethers.solidityPacked(
-				['uint128', 'uint128'],
-				[BigInt(userOp.maxPriorityFeePerGas), BigInt(userOp.maxFeePerGas)]
-			),
-			ethers.keccak256(userOp.paymasterAndData)
-		]
-	)
-}
-
-export async function getUserOpHash(
+function getVerifyingPaymasterHash(
 	userOp: UserOperationParams,
-	entryPoint: string,
+	validUntil: number,
+	validAfter: number,
 	chainId: number
-): Promise<string> {
-	const packed = packUserOp(userOp)
-	const userOpHash = ethers.keccak256(packed)
-
+): string {
 	const abiCoder = ethers.AbiCoder.defaultAbiCoder()
-	const encoded = abiCoder.encode(
-		['bytes32', 'address', 'uint256'],
-		[userOpHash, entryPoint, chainId]
+	const initCode =
+		userOp.factory && userOp.factoryData
+			? ethers.concat([userOp.factory, userOp.factoryData])
+			: '0x'
+
+	const accountGasLimits = ethers.solidityPacked(
+		['uint128', 'uint128'],
+		[BigInt(userOp.verificationGasLimit), BigInt(userOp.callGasLimit)]
 	)
 
-	return ethers.keccak256(encoded)
+	const gasFees = ethers.solidityPacked(
+		['uint128', 'uint128'],
+		[BigInt(userOp.maxPriorityFeePerGas), BigInt(userOp.maxFeePerGas)]
+	)
+
+	const paymasterGasLimitsPacked = ethers.solidityPacked(
+		['uint128', 'uint128'],
+		[BigInt(userOp.paymasterVerificationGasLimit || 0), BigInt(userOp.paymasterPostOpGasLimit || 0)]
+	)
+
+	const paymasterValidationGasLimit = BigInt(paymasterGasLimitsPacked)
+
+	return ethers.keccak256(
+		abiCoder.encode(
+			[
+				'address', // sender
+				'uint256', // nonce
+				'bytes32', // keccak256(initCode)
+				'bytes32', // keccak256(callData)
+				'bytes32', // accountGasLimits
+				'uint256', // paymasterValidationGasLimit (uint256 cast from bytes32)
+				'uint256', // preVerificationGas
+				'bytes32', // gasFees
+				'uint256', // chainid
+				'address', // paymaster address
+				'uint256', // validUntil
+				'uint256' // validAfter
+			],
+			[
+				userOp.sender,
+				userOp.nonce,
+				ethers.keccak256(initCode),
+				ethers.keccak256(userOp.callData),
+				accountGasLimits,
+				paymasterValidationGasLimit,
+				userOp.preVerificationGas,
+				gasFees,
+				chainId,
+				env.PAYMASTER_ADDRESS,
+				validUntil,
+				validAfter
+			]
+		)
+	)
 }
+
+// Singleton instance
+let paymasterSignerInstance: ethers.Wallet | null = null
 
 function getPaymasterSigner(): ethers.Wallet {
-	return new ethers.Wallet(env.PAYMASTER_SIGNER_KEY)
+	if (!paymasterSignerInstance) {
+		paymasterSignerInstance = new ethers.Wallet(env.PAYMASTER_SIGNER_KEY)
+	}
+	return paymasterSignerInstance
 }
 
 export function validateBeforeSigning(userOp: UserOperationParams): {
 	valid: boolean
 	reason?: string
 } {
-	// Check if fee is included
+	// Skip fee validation for deployment operations
+	if (userOp.callData === '0x') {
+		return { valid: true }
+	}
+
+	// Check if fee is included for payment operations
 	const hasFee = validateFeeIncluded(userOp)
 	if (!hasFee) {
 		return {
@@ -76,32 +98,117 @@ export function validateBeforeSigning(userOp: UserOperationParams): {
 	return { valid: true }
 }
 
-export async function signUserOp(userOp: UserOperationParams, chainId: number): Promise<string> {
+export async function signUserOp(
+	userOp: UserOperationParams,
+	chainId: number
+): Promise<{
+	paymaster: string
+	paymasterVerificationGasLimit: string
+	paymasterPostOpGasLimit: string
+	paymasterData: string
+}> {
 	const validation = validateBeforeSigning(userOp)
 	if (!validation.valid) {
 		throw new BaseErrors.ERR_PAYMASTER_VALIDATION_FAILED()
 	}
 
+	const validAfter = Math.floor(Date.now() / 1000) - 3600 // Valid from 1 hour ago
+	const validUntil = Math.floor(Date.now() / 1000) + 48 * 60 * 60 // 48 hours from now
+
+	const paymasterVerificationGasLimit = 300000
+	const paymasterPostOpGasLimit = 150000
+
+	// Temporarily set paymaster fields so they're included in the hash
+	const userOpWithPaymaster = {
+		...userOp,
+		paymaster: env.PAYMASTER_ADDRESS,
+		paymasterVerificationGasLimit: ethers.toBeHex(paymasterVerificationGasLimit),
+		paymasterPostOpGasLimit: ethers.toBeHex(paymasterPostOpGasLimit)
+	}
+
+	const hash = getVerifyingPaymasterHash(userOpWithPaymaster, validUntil, validAfter, chainId)
 	const signer = getPaymasterSigner()
-	const userOpHash = await getUserOpHash(userOp, env.ENTRY_POINT_ADDRESS, chainId)
-	const signature = await signer.signMessage(ethers.getBytes(userOpHash))
+	const signature = await signer.signMessage(ethers.getBytes(hash))
+	const abiCoder = ethers.AbiCoder.defaultAbiCoder()
+	const timeEncoding = abiCoder.encode(['uint48', 'uint48'], [validUntil, validAfter])
+	const paymasterData = ethers.concat([timeEncoding, signature])
 
-	const verificationGasLimit = ethers.toBeHex(150000, 16) // 150k gas for verification
-	const postOpGasLimit = ethers.toBeHex(50000, 16) // 50k gas for post-op
-
-	const paymasterAndData = ethers.concat([
-		env.PAYMASTER_ADDRESS, // 20 bytes
-		verificationGasLimit, // 16 bytes
-		postOpGasLimit, // 16 bytes
-		signature // 65 bytes
-	])
-
-	return ethers.hexlify(paymasterAndData)
+	return {
+		paymaster: env.PAYMASTER_ADDRESS,
+		paymasterVerificationGasLimit: ethers.toBeHex(paymasterVerificationGasLimit),
+		paymasterPostOpGasLimit: ethers.toBeHex(paymasterPostOpGasLimit),
+		paymasterData
+	}
 }
 
 export function getPaymasterSignerAddress(): string {
 	const signer = getPaymasterSigner()
 	return signer.address
+}
+
+export async function getUserOpHash(
+	userOp: UserOperationParams,
+	entryPointAddress: string,
+	chainId: number
+): Promise<string> {
+	const abiCoder = ethers.AbiCoder.defaultAbiCoder()
+
+	const initCode =
+		userOp.factory && userOp.factoryData
+			? ethers.concat([userOp.factory, userOp.factoryData])
+			: '0x'
+
+	const accountGasLimits = ethers.solidityPacked(
+		['uint128', 'uint128'],
+		[BigInt(userOp.verificationGasLimit), BigInt(userOp.callGasLimit)]
+	)
+
+	const gasFees = ethers.solidityPacked(
+		['uint128', 'uint128'],
+		[BigInt(userOp.maxPriorityFeePerGas), BigInt(userOp.maxFeePerGas)]
+	)
+
+	let paymasterAndData = '0x'
+	if (userOp.paymaster) {
+		const paymasterVerificationGasLimit = userOp.paymasterVerificationGasLimit || '0x'
+		const paymasterPostOpGasLimit = userOp.paymasterPostOpGasLimit || '0x'
+		const paymasterData = userOp.paymasterData || '0x'
+
+		// paymaster (20 bytes) + verificationGasLimit (16 bytes) + postOpGasLimit (16 bytes) + paymasterData
+		const verificationGasLimitPacked = ethers.zeroPadValue(
+			ethers.toBeHex(paymasterVerificationGasLimit),
+			16
+		)
+		const postOpGasLimitPacked = ethers.zeroPadValue(ethers.toBeHex(paymasterPostOpGasLimit), 16)
+
+		paymasterAndData = ethers.concat([
+			userOp.paymaster,
+			verificationGasLimitPacked,
+			postOpGasLimitPacked,
+			paymasterData
+		])
+	}
+
+	const packedUserOp = abiCoder.encode(
+		['address', 'uint256', 'bytes32', 'bytes32', 'bytes32', 'uint256', 'bytes32', 'bytes32'],
+		[
+			userOp.sender,
+			userOp.nonce,
+			ethers.keccak256(initCode),
+			ethers.keccak256(userOp.callData),
+			accountGasLimits,
+			userOp.preVerificationGas,
+			gasFees,
+			ethers.keccak256(paymasterAndData)
+		]
+	)
+
+	const userOpHash = ethers.keccak256(packedUserOp)
+
+	// Return hash of (userOpHash, entryPoint, chainId)
+	return ethers.keccak256(
+		abiCoder.encode(['bytes32', 'address', 'uint256'], [userOpHash, entryPointAddress, chainId])
+	)
 }
 
 export async function verifyPaymasterSignature(
