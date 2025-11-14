@@ -52,50 +52,38 @@ async function checkAndApproveToken(
 	const walletWithProvider = wallet.connect(provider)
 	const token = new Contract(tokenAddress, ERC20_ABI, walletWithProvider)
 
-	console.log('\n🔍 Checking token approval...')
-
 	const [balance, allowance, decimals] = await Promise.all([
 		token.balanceOf(wallet.address),
 		token.allowance(wallet.address, relayerAddress),
 		token.decimals()
 	])
 
-	console.log('   Token Balance:', ethers.formatUnits(balance, decimals))
-	console.log('   Current Allowance:', ethers.formatUnits(allowance, decimals))
+	console.log('Token Balance:', ethers.formatUnits(balance, decimals))
+	console.log('Current Allowance:', ethers.formatUnits(allowance, decimals))
 
 	if (balance === 0n) {
-		console.log('\n⚠️  WARNING: Your wallet has no tokens!')
+		console.log('WARNING: Wallet has no tokens')
 		return false
 	}
 
 	if (allowance === 0n) {
-		console.log('\n⚠️  Token approval required for B402 relayer contract')
-		const answer = await askQuestion('   Approve 1,000,000 tokens? (yes/no): ')
+		console.log('Token approval required')
+		const answer = await askQuestion('Approve 1,000,000 tokens? (yes/no): ')
 
 		if (answer.toLowerCase() === 'yes' || answer.toLowerCase() === 'y') {
 			const approveAmount = ethers.parseUnits('1000000', decimals)
-			console.log('\n🚀 Sending approval transaction...')
 
-			try {
-				const tx = await token.approve(relayerAddress, approveAmount)
-				console.log('   Transaction hash:', tx.hash)
-				console.log('   Waiting for confirmation...')
-
-				await tx.wait()
-				console.log('✅ Approval confirmed!')
-				return true
-			} catch (error: any) {
-				console.log('❌ Approval failed:', error.message)
-				return false
-			}
-		} else {
-			console.log('⚠️  Skipping approval. The settle endpoint will fail.')
-			return false
+			const tx = await token.approve(relayerAddress, approveAmount)
+			console.log(`Tx: ${tx.hash}`)
+			await tx.wait()
+			console.log('Approved')
+			return true
 		}
-	} else {
-		console.log('✅ Token already approved')
-		return true
+		console.log('Skipping approval')
+		return false
 	}
+	console.log('Already approved')
+	return true
 }
 
 async function generateTestSignature() {
@@ -103,23 +91,12 @@ async function generateTestSignature() {
 	const rpcUrl = process.env.BSC_RPC_URL
 	const liveApiUrl = process.env.LIVE_API_URL
 
-	if (!privateKey) {
-		console.error('❌ Please set TEST_WALLET_PRIVATE_KEY in your .env file')
-		process.exit(1)
-	}
-
-	if (!rpcUrl) {
-		console.error('❌ Please set BSC_RPC_URL in your .env file')
-		process.exit(1)
-	}
-
-	if (!liveApiUrl) {
-		console.error('❌ Please set LIVE_API_URL in your .env file')
-		process.exit(1)
-	}
+	if (!privateKey) throw new Error('TEST_WALLET_PRIVATE_KEY not set')
+	if (!rpcUrl) throw new Error('BSC_RPC_URL not set')
+	if (!liveApiUrl) throw new Error('LIVE_API_URL not set')
 
 	const wallet = new ethers.Wallet(privateKey)
-	console.log('📝 Wallet Address:', wallet.address)
+	console.log('Wallet:', wallet.address)
 
 	const tokenAddress =
 		process.env.USD1_TOKEN_ADDRESS || '0x0000000000000000000000000000000000000000'
@@ -127,9 +104,9 @@ async function generateTestSignature() {
 		process.env.B402_RELAYER_ADDRESS || '0x0000000000000000000000000000000000000000'
 	const recipientAddress = '0x0553B926D6a599CAAc56377042cA6B40dd0b7F4e'
 
-	console.log('💰 Token Address:', tokenAddress)
-	console.log('🔄 Relayer Address:', relayerAddress)
-	console.log('📬 Recipient Address:', recipientAddress)
+	console.log('Token:', tokenAddress)
+	console.log('Relayer:', relayerAddress)
+	console.log('Recipient:', recipientAddress)
 
 	await checkAndApproveToken(wallet, tokenAddress, relayerAddress, rpcUrl)
 
@@ -153,11 +130,11 @@ async function generateTestSignature() {
 		verifyingContract: relayerAddress
 	}
 
-	console.log('\n📋 Authorization:', JSON.stringify(authorization, null, 2))
+	console.log('\nAuthorization:', JSON.stringify(authorization, null, 2))
 
 	const signature = await wallet.signTypedData(domain, EIP712_TYPES, authorization)
 
-	console.log('\n✅ Signature generated:', signature)
+	console.log('\nSignature:', signature)
 
 	const payload = {
 		paymentPayload: {
@@ -173,12 +150,11 @@ async function generateTestSignature() {
 		}
 	}
 
-	console.log('\n📦 Complete Payload for Postman:')
+	console.log('\nPayload:')
 	console.log(JSON.stringify(payload, null, 2))
 
-	console.log('\n🎯 Copy the JSON above and use it in Postman for:')
-	console.log(`   - POST ${liveApiUrl}/api/v1/verify`)
-	console.log(`   - POST ${liveApiUrl}/api/v1/settle`)
+	console.log(`\nPOST ${liveApiUrl}/api/v1/verify`)
+	console.log(`POST ${liveApiUrl}/api/v1/settle`)
 }
 
 generateTestSignature().catch(console.error)
