@@ -4,10 +4,14 @@ import {
 	HealthResponseSchema,
 	SettleRequestSchema,
 	SettleResponseSchema,
+	SettleWalletPaymentRequestSchema,
+	SettleWalletPaymentResponseSchema,
 	VerifyRequestSchema,
-	VerifyResponseSchema
+	VerifyResponseSchema,
+	VerifyWalletPaymentRequestSchema,
+	VerifyWalletPaymentResponseSchema
 } from '../../schema/b402'
-import { health, settle, verify } from './b402Controller'
+import { health, settle, settleWalletPayment, verify, verifyWalletPayment } from './b402Controller'
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 export const register = (server: FastifyInstance, _: any, next: any) => {
@@ -35,6 +39,33 @@ export const register = (server: FastifyInstance, _: any, next: any) => {
 			}
 		},
 		settle
+	)
+
+	// Smart Wallet Routes
+	server.post(
+		'/wallet/verify',
+		{
+			schema: {
+				body: VerifyWalletPaymentRequestSchema,
+				response: {
+					200: VerifyWalletPaymentResponseSchema
+				}
+			}
+		},
+		verifyWalletPayment
+	)
+
+	server.post(
+		'/wallet/settle',
+		{
+			schema: {
+				body: SettleWalletPaymentRequestSchema,
+				response: {
+					200: SettleWalletPaymentResponseSchema
+				}
+			}
+		},
+		settleWalletPayment
 	)
 
 	server.get(

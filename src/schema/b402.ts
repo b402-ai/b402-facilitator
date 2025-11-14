@@ -105,6 +105,241 @@ export const HealthResponseSchema = {
 	additionalProperties: false
 } as const
 
+// Transaction schema for batch payments
+export const TransactionSchema = {
+	type: 'object',
+	properties: {
+		to: { type: 'string' },
+		amount: { type: 'string' },
+		token: { type: 'string' }
+	},
+	required: ['to', 'amount', 'token'],
+	additionalProperties: false
+} as const
+
+// POST /wallet/verify - Request
+export const VerifyWalletPaymentRequestSchema = {
+	type: 'object',
+	properties: {
+		walletAddress: { type: 'string' },
+		transactions: {
+			type: 'array',
+			items: TransactionSchema,
+			minItems: 1
+		}
+	},
+	required: ['walletAddress', 'transactions'],
+	additionalProperties: false
+} as const
+
+// POST /wallet/verify - Response
+export const VerifyWalletPaymentResponseSchema = {
+	type: 'object',
+	properties: {
+		isValid: { type: 'boolean' },
+		payer: { type: 'string' },
+		userOp: {
+			type: 'object',
+			properties: {
+				sender: { type: 'string' },
+				nonce: { type: 'string' },
+				// ERC-4337 v0.7 unpacked fields (optional)
+				factory: { type: 'string' },
+				factoryData: { type: 'string' },
+				callData: { type: 'string' },
+				callGasLimit: { type: 'string' },
+				verificationGasLimit: { type: 'string' },
+				preVerificationGas: { type: 'string' },
+				maxFeePerGas: { type: 'string' },
+				maxPriorityFeePerGas: { type: 'string' },
+				// ERC-4337 v0.7 unpacked paymaster fields (optional)
+				paymaster: { type: 'string' },
+				paymasterVerificationGasLimit: { type: 'string' },
+				paymasterPostOpGasLimit: { type: 'string' },
+				paymasterData: { type: 'string' },
+				signature: { type: 'string' }
+			},
+			required: [
+				'sender',
+				'nonce',
+				'callData',
+				'callGasLimit',
+				'verificationGasLimit',
+				'preVerificationGas',
+				'maxFeePerGas',
+				'maxPriorityFeePerGas',
+				'signature'
+			],
+			additionalProperties: false
+		},
+		userOpHash: { type: 'string' },
+		feeAmount: { type: 'string' },
+		totalAmount: { type: 'string' },
+		invalidReason: { type: 'string' }
+	},
+	required: ['isValid', 'userOp', 'userOpHash', 'feeAmount', 'totalAmount'],
+	additionalProperties: false
+} as const
+
+// POST /wallet/settle - Request
+export const SettleWalletPaymentRequestSchema = {
+	type: 'object',
+	properties: {
+		userOp: {
+			type: 'object',
+			properties: {
+				sender: { type: 'string' },
+				nonce: { type: 'string' },
+				// ERC-4337 v0.7 unpacked fields (optional)
+				factory: { type: 'string' },
+				factoryData: { type: 'string' },
+				callData: { type: 'string' },
+				callGasLimit: { type: 'string' },
+				verificationGasLimit: { type: 'string' },
+				preVerificationGas: { type: 'string' },
+				maxFeePerGas: { type: 'string' },
+				maxPriorityFeePerGas: { type: 'string' },
+				// ERC-4337 v0.7 unpacked paymaster fields (optional)
+				paymaster: { type: 'string' },
+				paymasterVerificationGasLimit: { type: 'string' },
+				paymasterPostOpGasLimit: { type: 'string' },
+				paymasterData: { type: 'string' },
+				signature: { type: 'string' }
+			},
+			required: [
+				'sender',
+				'nonce',
+				'callData',
+				'callGasLimit',
+				'verificationGasLimit',
+				'preVerificationGas',
+				'maxFeePerGas',
+				'maxPriorityFeePerGas',
+				'signature'
+			],
+			additionalProperties: false
+		},
+		signature: { type: 'string' },
+		paymentRequirements: {
+			type: 'object',
+			properties: {
+				network: { type: 'string' }
+			},
+			additionalProperties: false
+		}
+	},
+	required: ['userOp', 'signature'],
+	additionalProperties: false
+} as const
+
+// Payment detail schema
+export const PaymentDetailSchema = {
+	type: 'object',
+	properties: {
+		recipient: { type: 'string' },
+		amount: { type: 'string' },
+		isProtocolFee: { type: 'boolean' }
+	},
+	required: ['recipient', 'amount', 'isProtocolFee'],
+	additionalProperties: false
+} as const
+
+// POST /wallet/settle - Response
+export const SettleWalletPaymentResponseSchema = {
+	type: 'object',
+	properties: {
+		success: { type: 'boolean' },
+		txHash: { type: 'string' },
+		userOpHash: { type: 'string' },
+		network: { type: 'string' },
+		payments: {
+			type: 'array',
+			items: PaymentDetailSchema,
+			minItems: 1
+		},
+		errorReason: { type: 'string' }
+	},
+	required: ['success', 'txHash', 'userOpHash', 'network', 'payments'],
+	additionalProperties: false
+} as const
+
+// TypeScript interfaces for wallet endpoints
+export interface CreateWalletRequest {
+	ownerAddress: string
+}
+
+export interface CreateWalletResponse {
+	walletAddress: string
+	txHash: string
+}
+
+export interface Transaction {
+	to: string
+	amount: string
+	token: string
+}
+
+export interface VerifyWalletRequest {
+	walletAddress: string
+	transactions: Transaction[]
+	paymentRequirements?: {
+		network?: string
+	}
+}
+
+export interface UserOperation {
+	sender: string
+	nonce: string
+	// ERC-4337 v0.7 unpacked factory fields
+	factory?: string
+	factoryData?: string
+	callData: string
+	callGasLimit: string
+	verificationGasLimit: string
+	preVerificationGas: string
+	maxFeePerGas: string
+	maxPriorityFeePerGas: string
+	// ERC-4337 v0.7 unpacked paymaster fields
+	paymaster?: string
+	paymasterVerificationGasLimit?: string
+	paymasterPostOpGasLimit?: string
+	paymasterData?: string
+	signature: string
+}
+
+export interface VerifyWalletResponse {
+	isValid: boolean
+	payer?: string
+	userOp: UserOperation
+	userOpHash: string
+	feeAmount: string
+	totalAmount: string
+	invalidReason?: string
+}
+
+export interface SettleWalletRequest {
+	userOp: UserOperation
+	signature: string
+	paymentRequirements?: {
+		network?: string
+	}
+}
+
+export interface PaymentDetail {
+	recipient: string
+	amount: string
+	isProtocolFee: boolean
+}
+
+export interface SettleWalletResponse {
+	success: boolean
+	txHash: string
+	userOpHash: string
+	network: string
+	payments: PaymentDetail[]
+	errorReason?: string
+}
+
 // TypeScript interfaces
 export interface Authorization {
 	from: string

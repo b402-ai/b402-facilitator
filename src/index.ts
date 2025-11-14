@@ -7,7 +7,7 @@ import fastifyPlugin from 'fastify-plugin'
 import { rateLimiterHook } from './hooks/rateLimiter'
 import { register as registerB402 } from './routes/b402/b402Routes'
 import { envSchema } from './schema/env'
-import { initializeProviderService } from './utils/providerService'
+import { initializeProviderService } from './utils/provider'
 
 const server = fastify({
 	logger: true

@@ -16,6 +16,8 @@ export type ErrorCodes =
 	| 'nonce_error'
 	| 'token_error'
 	| 'configuration_error'
+	| 'wallet_error'
+	| 'userp_error'
 
 const errorCodeToHttpStatus: Record<ErrorCodes, number> = {
 	bad_request: 400,
@@ -32,7 +34,9 @@ const errorCodeToHttpStatus: Record<ErrorCodes, number> = {
 	signature_error: 401,
 	nonce_error: 400,
 	token_error: 400,
-	configuration_error: 500
+	configuration_error: 500,
+	wallet_error: 400,
+	userp_error: 500
 }
 
 export interface ErrorResponse {
@@ -243,6 +247,138 @@ const errorCodesConfig = {
 	ERR_INTERNAL_SERVER_ERROR: {
 		code: 'internal_server_error' as const,
 		message: 'An unexpected error occurred. Please try again.'
+	},
+
+	// Smart wallet errors
+	ERR_INVALID_ADDRESS: {
+		code: 'validation_error' as const,
+		message: 'Invalid address provided'
+	},
+	ERR_WALLET_ALREADY_DEPLOYED: {
+		code: 'wallet_error' as const,
+		message: 'Wallet already deployed'
+	},
+	ERR_WALLET_NOT_DEPLOYED: {
+		code: 'wallet_error' as const,
+		message: 'Wallet not deployed'
+	},
+	ERR_UNSUPPORTED_TOKEN: {
+		code: 'token_error' as const,
+		message: 'Token not supported'
+	},
+	ERR_INSUFFICIENT_ALLOWANCE: {
+		code: 'token_error' as const,
+		message: 'Insufficient token allowance'
+	},
+	ERR_FEE_VALIDATION_FAILED: {
+		code: 'validation_error' as const,
+		message: 'Fee validation failed'
+	},
+	ERR_USEROP_CREATION_FAILED: {
+		code: 'userp_error' as const,
+		message: 'Failed to create UserOperation'
+	},
+	ERR_INVALID_USEROP: {
+		code: 'validation_error' as const,
+		message: 'Invalid UserOperation structure'
+	},
+	ERR_BUNDLER_SUBMISSION_FAILED: {
+		code: 'userp_error' as const,
+		message: 'Failed to submit to bundler'
+	},
+	ERR_PAYMASTER_SIGNING_FAILED: {
+		code: 'userp_error' as const,
+		message: 'Failed to sign as paymaster'
+	},
+
+	// Array and transaction validation errors
+	ERR_ARRAY_LENGTH_MISMATCH: {
+		code: 'validation_error' as const,
+		message: 'Recipients and amounts arrays must have same length'
+	},
+	ERR_EMPTY_TRANSACTIONS: {
+		code: 'validation_error' as const,
+		message: 'At least one transaction required'
+	},
+	ERR_MULTIPLE_TOKENS_NOT_ALLOWED: {
+		code: 'validation_error' as const,
+		message: 'All transactions must use the same token'
+	},
+	ERR_RECIPIENT_REQUIRED: {
+		code: 'validation_error' as const,
+		message: 'Must have at least one recipient'
+	},
+	ERR_TOO_MANY_TRANSACTIONS: {
+		code: 'validation_error' as const,
+		message: 'Too many transactions, maximum 20'
+	},
+	ERR_INVALID_RECIPIENT_ADDRESS: {
+		code: 'validation_error' as const,
+		message: 'Invalid recipient address'
+	},
+	ERR_ZERO_ADDRESS_RECIPIENT: {
+		code: 'validation_error' as const,
+		message: 'Recipient cannot be zero address'
+	},
+	ERR_INVALID_AMOUNT: {
+		code: 'validation_error' as const,
+		message: 'Invalid amount'
+	},
+
+	// Token balance errors
+	ERR_INSUFFICIENT_BALANCE: {
+		code: 'token_error' as const,
+		message: 'Insufficient token balance'
+	},
+
+	// Bundler errors
+	ERR_BUNDLER_REQUEST_FAILED: {
+		code: 'userp_error' as const,
+		message: 'Bundler request failed'
+	},
+	ERR_BUNDLER_ERROR: {
+		code: 'userp_error' as const,
+		message: 'Bundler returned an error'
+	},
+	ERR_NO_RECEIPT: {
+		code: 'userp_error' as const,
+		message: 'No receipt returned from bundler'
+	},
+
+	// Paymaster errors
+	ERR_PAYMASTER_VALIDATION_FAILED: {
+		code: 'userp_error' as const,
+		message: 'Paymaster validation failed'
+	},
+
+	// Provider errors
+	ERR_PROVIDER_NOT_INITIALIZED: {
+		code: 'configuration_error' as const,
+		message: 'Provider service not initialized'
+	},
+
+	// Environment errors
+	ERR_MISSING_ENV_VARS: {
+		code: 'configuration_error' as const,
+		message: 'Missing required environment variables'
+	},
+
+	// Gas estimation errors
+	ERR_GAS_ESTIMATION_FAILED: {
+		code: 'userp_error' as const,
+		message: 'Gas estimation failed'
+	},
+	ERR_GAS_ESTIMATION_PARSE_FAILED: {
+		code: 'userp_error' as const,
+		message: 'Failed to parse gas estimation response'
+	},
+	ERR_GAS_ESTIMATION_ERROR: {
+		code: 'userp_error' as const,
+		message: 'Gas estimation returned an error'
+	},
+	ERR_GAS_ESTIMATION_NO_RESULT: {
+		code: 'userp_error' as const,
+		message: 'Gas estimation returned no result'
 	}
 } as const
 
