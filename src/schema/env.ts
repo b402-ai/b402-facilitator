@@ -23,11 +23,15 @@ interface IEnvSchema {
 	BUNDLER_RPC_URL: string
 	PAYMASTER_ADDRESS: string
 	PAYMASTER_SIGNER_KEY: string
-	WALLET_FEE_AMOUNT: string
+	WALLET_PAYMENT_FEE: string
+	WALLET_DEPLOYMENT_FEE: string
 	WALLET_FEE_RECIPIENT: string
 
 	// Admin API secret for bypassing rate limits
 	ADMIN_API_SECRET?: string
+
+	// MongoDB connection string
+	DATABASE_URL?: string
 }
 
 declare module 'fastify' {
@@ -46,6 +50,8 @@ export const envSchema: JSONSchemaType<IEnvSchema> = {
 		'BUNDLER_RPC_URL',
 		'PAYMASTER_ADDRESS',
 		'PAYMASTER_SIGNER_KEY',
+		'WALLET_PAYMENT_FEE',
+		'WALLET_DEPLOYMENT_FEE',
 		'WALLET_FEE_RECIPIENT'
 	],
 	properties: {
@@ -68,10 +74,13 @@ export const envSchema: JSONSchemaType<IEnvSchema> = {
 		BUNDLER_RPC_URL: { type: 'string' },
 		PAYMASTER_ADDRESS: { type: 'string' },
 		PAYMASTER_SIGNER_KEY: { type: 'string' },
-		WALLET_FEE_AMOUNT: { type: 'string', default: '0.1' },
+		WALLET_PAYMENT_FEE: { type: 'string' },
+		WALLET_DEPLOYMENT_FEE: { type: 'string' },
 		WALLET_FEE_RECIPIENT: { type: 'string' },
 
-		ADMIN_API_SECRET: { type: 'string', nullable: true }
+		ADMIN_API_SECRET: { type: 'string', nullable: true },
+
+		DATABASE_URL: { type: 'string', nullable: true }
 	}
 }
 
@@ -88,6 +97,8 @@ function getEnv(): IEnvSchema {
 		'BUNDLER_RPC_URL',
 		'PAYMASTER_ADDRESS',
 		'PAYMASTER_SIGNER_KEY',
+		'WALLET_PAYMENT_FEE',
+		'WALLET_DEPLOYMENT_FEE',
 		'WALLET_FEE_RECIPIENT'
 	]
 
@@ -110,9 +121,11 @@ function getEnv(): IEnvSchema {
 		BUNDLER_RPC_URL: process.env.BUNDLER_RPC_URL as string,
 		PAYMASTER_ADDRESS: process.env.PAYMASTER_ADDRESS as string,
 		PAYMASTER_SIGNER_KEY: process.env.PAYMASTER_SIGNER_KEY as string,
-		WALLET_FEE_AMOUNT: process.env.WALLET_FEE_AMOUNT || '0.1',
+		WALLET_PAYMENT_FEE: process.env.WALLET_PAYMENT_FEE as string,
+		WALLET_DEPLOYMENT_FEE: process.env.WALLET_DEPLOYMENT_FEE as string,
 		WALLET_FEE_RECIPIENT: process.env.WALLET_FEE_RECIPIENT as string,
-		ADMIN_API_SECRET: process.env.ADMIN_API_SECRET
+		ADMIN_API_SECRET: process.env.ADMIN_API_SECRET,
+		DATABASE_URL: process.env.DATABASE_URL
 	}
 }
 

@@ -71,7 +71,7 @@ export async function createPaymentUserOpOrThrow(params: {
 		throw new BaseErrors.ERR_INVALID_ADDRESS()
 	}
 
-	// Verify wallet is deployed
+	// Validate wallet is deployed
 	const deployed = await isWalletDeployed(walletAddress)
 	if (!deployed) {
 		throw new BaseErrors.ERR_WALLET_NOT_DEPLOYED()
@@ -126,7 +126,7 @@ export async function createPaymentUserOpOrThrow(params: {
 	const totalPaymentAmount = paymentAmounts.reduce((sum, amt) => sum + amt, 0n)
 
 	// Add b402 fee
-	const feeAmount = ethers.parseUnits(env.WALLET_FEE_AMOUNT, tokenConfig.decimals)
+	const feeAmount = ethers.parseUnits(env.WALLET_PAYMENT_FEE, tokenConfig.decimals)
 
 	// Calculate total amount needed for this transaction (all payments + fee)
 	const totalAmountNeeded = totalPaymentAmount + feeAmount
@@ -223,7 +223,7 @@ export function validateFeeIncluded(userOp: UserOperationParams): boolean {
 				if (!tokenConfig) return false
 
 				const feeAmount = amounts[feeRecipientIndex]
-				const expectedFee = ethers.parseUnits(env.WALLET_FEE_AMOUNT, tokenConfig.decimals)
+				const expectedFee = ethers.parseUnits(env.WALLET_PAYMENT_FEE, tokenConfig.decimals)
 				return feeAmount === expectedFee
 			} catch {
 				return false

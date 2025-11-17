@@ -92,7 +92,7 @@ export function validateBeforeSigning(userOp: UserOperationParams): {
 	if (!hasFee) {
 		return {
 			valid: false,
-			reason: `Fee transfer not found. Required: ${env.WALLET_FEE_AMOUNT} USDT to ${env.WALLET_FEE_RECIPIENT}`
+			reason: `Fee transfer not found. Required: ${env.WALLET_PAYMENT_FEE} USDT to ${env.WALLET_FEE_RECIPIENT}`
 		}
 	}
 	return { valid: true }

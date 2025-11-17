@@ -7,6 +7,7 @@ import fastifyPlugin from 'fastify-plugin'
 import { rateLimiterHook } from './hooks/rateLimiter'
 import { register as registerB402 } from './routes/b402/b402Routes'
 import { envSchema } from './schema/env'
+import { connectToDatabase } from './utils/mongooseClient'
 import { initializeProviderService } from './utils/provider'
 
 const server = fastify({
@@ -50,13 +51,16 @@ async function start() {
 
 		server.log.info(`Provider service initialized for network: ${server.config.NETWORK}`)
 
-		await server.listen({
-			port: Number(process.env.SERVER_PORT || 3402),
-			host: process.env.SERVER_HOST || '0.0.0.0'
-		})
+		await connectToDatabase()
+		server.log.info('Connected to MongoDB')
+
+		const port = Number(process.env.SERVER_PORT || 3402)
+		const host = process.env.SERVER_HOST || '0.0.0.0'
+
+		await server.listen({ port, host })
 
 		server.log.info('B402 Facilitator Service')
-		server.log.info(`Listening on http://localhost:${process.env.SERVER_PORT || 3402}`)
+		server.log.info(`Listening on http://${host}:${port}`)
 	} catch (err) {
 		server.log.error(err)
 		process.exit(1)

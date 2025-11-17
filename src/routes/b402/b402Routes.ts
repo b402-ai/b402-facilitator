@@ -1,6 +1,11 @@
 import type { FastifyInstance } from 'fastify'
 
 import {
+	ClaimWalletDeploymentRequestSchema,
+	ClaimWalletDeploymentResponseSchema,
+	DeployWalletsRequestSchema,
+	DeployWalletsResponseSchema,
+	GetWalletsByOwnerResponseSchema,
 	HealthResponseSchema,
 	SettleRequestSchema,
 	SettleResponseSchema,
@@ -11,7 +16,16 @@ import {
 	VerifyWalletPaymentRequestSchema,
 	VerifyWalletPaymentResponseSchema
 } from '../../schema/b402'
-import { health, settle, settleWalletPayment, verify, verifyWalletPayment } from './b402Controller'
+import {
+	claimWalletDeployment,
+	deployWallets,
+	getWalletsByOwner,
+	health,
+	settle,
+	settleWalletPayment,
+	verify,
+	verifyWalletPayment
+} from './b402Controller'
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 export const register = (server: FastifyInstance, _: any, next: any) => {
@@ -66,6 +80,44 @@ export const register = (server: FastifyInstance, _: any, next: any) => {
 			}
 		},
 		settleWalletPayment
+	)
+
+	server.post(
+		'/wallet/deploy',
+		{
+			schema: {
+				body: DeployWalletsRequestSchema,
+				response: {
+					200: DeployWalletsResponseSchema
+				}
+			}
+		},
+		deployWallets
+	)
+
+	server.post(
+		'/wallet/claim',
+		{
+			schema: {
+				body: ClaimWalletDeploymentRequestSchema,
+				response: {
+					200: ClaimWalletDeploymentResponseSchema
+				}
+			}
+		},
+		claimWalletDeployment
+	)
+
+	server.get(
+		'/wallet/:owner',
+		{
+			schema: {
+				response: {
+					200: GetWalletsByOwnerResponseSchema
+				}
+			}
+		},
+		getWalletsByOwner
 	)
 
 	server.get(
