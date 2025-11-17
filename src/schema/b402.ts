@@ -37,7 +37,26 @@ export const PaymentRequirementsSchema = {
 	type: 'object',
 	properties: {
 		network: { type: 'string' },
-		relayerContract: { type: 'string' }
+		relayerContract: { type: 'string' },
+		deployment: {
+			type: 'object',
+			properties: {
+				ownerAddress: { type: 'string' },
+				salts: {
+					type: 'array',
+					items: { type: 'string' },
+					minItems: 1,
+					maxItems: 10
+				},
+				fundingAmounts: {
+					type: 'array',
+					items: { type: 'string' },
+					maxItems: 10
+				}
+			},
+			required: ['ownerAddress', 'salts'],
+			additionalProperties: false
+		}
 	},
 	required: ['network', 'relayerContract'],
 	additionalProperties: false
@@ -105,25 +124,28 @@ export const HealthResponseSchema = {
 	additionalProperties: false
 } as const
 
-// POST /wallet/deploy - Request
-export const DeployWalletsRequestSchema = {
+// POST /wallet/deploy/verify - Request
+export const DeployWalletsVerifyRequestSchema = {
 	type: 'object',
 	properties: {
-		ownerAddress: { type: 'string' },
-		count: { type: 'number', minimum: 1, maximum: 10 },
-		paymentPayload: PaymentPayloadSchema,
+		paymentPayload: {
+			type: 'array',
+			items: PaymentPayloadSchema,
+			minItems: 1,
+			maxItems: 11 // 1 fee payment + up to 10 funding payments
+		},
 		paymentRequirements: PaymentRequirementsSchema
 	},
-	required: ['ownerAddress', 'count', 'paymentPayload', 'paymentRequirements'],
+	required: ['paymentPayload', 'paymentRequirements'],
 	additionalProperties: false
 } as const
 
-// POST /wallet/deploy - Response
-export const DeployWalletsResponseSchema = {
+// POST /wallet/deploy/verify - Response
+export const DeployWalletsVerifyResponseSchema = {
 	type: 'object',
 	properties: {
-		paymentSuccess: { type: 'boolean' },
-		deploymentSuccess: { type: 'boolean' },
+		isValid: { type: 'boolean' },
+		payer: { type: 'string' },
 		wallets: {
 			type: 'array',
 			items: {
@@ -132,7 +154,72 @@ export const DeployWalletsResponseSchema = {
 					address: { type: 'string' },
 					salt: { type: 'string' },
 					owner: { type: 'string' },
-					deploymentTxHash: { type: 'string' }
+					fundingAmount: { type: 'string' }
+				},
+				required: ['address', 'salt', 'owner'],
+				additionalProperties: false
+			}
+		},
+		deploymentFee: { type: 'string' },
+		fundingFees: { type: 'string' },
+		totalFees: { type: 'string' },
+		invalidReason: { type: 'string' }
+	},
+	required: ['isValid', 'wallets', 'deploymentFee'],
+	additionalProperties: false
+} as const
+
+// POST /wallet/deploy/settle - Request
+export const DeployWalletsSettleRequestSchema = {
+	type: 'object',
+	properties: {
+		paymentPayload: {
+			type: 'array',
+			items: PaymentPayloadSchema,
+			minItems: 1,
+			maxItems: 11
+		},
+		paymentRequirements: PaymentRequirementsSchema,
+		wallets: {
+			type: 'array',
+			items: {
+				type: 'object',
+				properties: {
+					address: { type: 'string' },
+					salt: { type: 'string' },
+					owner: { type: 'string' },
+					fundingAmount: { type: 'string' }
+				},
+				required: ['address', 'salt', 'owner'],
+				additionalProperties: false
+			},
+			minItems: 1,
+			maxItems: 10
+		}
+	},
+	required: ['paymentPayload', 'paymentRequirements', 'wallets'],
+	additionalProperties: false
+} as const
+
+// POST /wallet/deploy/settle - Response
+export const DeployWalletsResponseSchema = {
+	type: 'object',
+	properties: {
+		paymentSuccess: { type: 'boolean' },
+		deploymentSuccess: { type: 'boolean' },
+		fundingSuccess: { type: 'boolean' },
+		wallets: {
+			type: 'array',
+			items: {
+				type: 'object',
+				properties: {
+					address: { type: 'string' },
+					salt: { type: 'string' },
+					owner: { type: 'string' },
+					deploymentTxHash: { type: 'string' },
+					fundingAmount: { type: 'string' },
+					fundingTxHash: { type: 'string' },
+					fundingCompleted: { type: 'boolean' }
 				},
 				required: ['address', 'salt', 'owner'],
 				additionalProperties: false
@@ -152,10 +239,31 @@ export const DeployWalletsResponseSchema = {
 				additionalProperties: false
 			}
 		},
+		failedFundings: {
+			type: 'array',
+			items: {
+				type: 'object',
+				properties: {
+					address: { type: 'string' },
+					salt: { type: 'string' },
+					owner: { type: 'string' },
+					fundingAmount: { type: 'string' }
+				},
+				required: ['address', 'salt', 'owner'],
+				additionalProperties: false
+			}
+		},
 		paymentTxHash: { type: 'string' },
 		deploymentFee: { type: 'string' }
 	},
-	required: ['paymentSuccess', 'deploymentSuccess', 'wallets', 'paymentTxHash', 'deploymentFee'],
+	required: [
+		'paymentSuccess',
+		'deploymentSuccess',
+		'fundingSuccess',
+		'wallets',
+		'paymentTxHash',
+		'deploymentFee'
+	],
 	additionalProperties: false
 } as const
 
@@ -497,6 +605,12 @@ export interface PaymentPayload {
 export interface PaymentRequirements {
 	network: string
 	relayerContract: string
+	// Only used in /wallet/deploy routes
+	deployment?: {
+		ownerAddress: string
+		salts: string[]
+		fundingAmounts?: string[]
+	}
 }
 
 export interface VerifyRequest {
@@ -539,18 +653,45 @@ export interface DeployedWallet {
 	deploymentTxHash?: string
 }
 
-export interface DeployWalletsRequest {
-	ownerAddress: string
-	count: number // 1-10
-	paymentPayload: PaymentPayload
+export interface DeployWalletsVerifyRequest {
+	paymentPayload: PaymentPayload[]
 	paymentRequirements: PaymentRequirements
+}
+
+export interface DeployWalletsVerifyResponse {
+	isValid: boolean
+	payer?: string
+	wallets: Array<Omit<DeployedWallet, 'deploymentTxHash'> & { fundingAmount?: string }>
+	deploymentFee: string
+	fundingFees?: string
+	totalFees?: string
+	invalidReason?: string
+}
+
+export interface DeployWalletsSettleRequest {
+	paymentPayload: PaymentPayload[]
+	paymentRequirements: PaymentRequirements
+	wallets: Array<Omit<DeployedWallet, 'deploymentTxHash'> & { fundingAmount?: string }>
 }
 
 export interface DeployWalletsResponse {
 	paymentSuccess: boolean
 	deploymentSuccess: boolean
-	wallets: DeployedWallet[]
+	fundingSuccess: boolean
+	wallets: Array<
+		DeployedWallet & {
+			fundingAmount?: string
+			fundingTxHash?: string
+			fundingCompleted?: boolean
+		}
+	>
 	failedWallets?: DeployedWallet[]
+	failedFundings?: Array<{
+		address: string
+		salt: string
+		owner: string
+		fundingAmount: string
+	}>
 	paymentTxHash: string
 	deploymentFee: string
 }

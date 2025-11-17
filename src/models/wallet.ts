@@ -9,6 +9,10 @@ export interface IWalletDeployment {
 	deploymentTxHash?: string
 	paymentCompleted: boolean
 	deploymentCompleted: boolean
+	fundingAmount?: string
+	fundingRequested: boolean
+	fundingCompleted: boolean
+	fundingTxHash?: string
 	createdAt: Date
 	updatedAt: Date
 }
@@ -58,6 +62,25 @@ const WalletDeploymentSchema = new mongoose.Schema<IWalletDeployment>(
 			type: Boolean,
 			required: true,
 			default: false
+		},
+		fundingAmount: {
+			type: String,
+			trim: true
+		},
+		fundingRequested: {
+			type: Boolean,
+			required: true,
+			default: false
+		},
+		fundingCompleted: {
+			type: Boolean,
+			required: true,
+			default: false
+		},
+		fundingTxHash: {
+			type: String,
+			trim: true,
+			lowercase: true
 		}
 	},
 	{
@@ -69,6 +92,7 @@ const WalletDeploymentSchema = new mongoose.Schema<IWalletDeployment>(
 WalletDeploymentSchema.index({ ownerAddress: 1 })
 WalletDeploymentSchema.index({ payerAddress: 1 })
 WalletDeploymentSchema.index({ paymentCompleted: 1, deploymentCompleted: 1 })
+WalletDeploymentSchema.index({ deploymentCompleted: 1, fundingRequested: 1, fundingCompleted: 1 })
 
 // Prevent duplicate payments for the same wallet (each wallet can only be paid for once)
 WalletDeploymentSchema.index({ walletAddress: 1 }, { unique: true })

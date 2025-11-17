@@ -3,8 +3,10 @@ import type { FastifyInstance } from 'fastify'
 import {
 	ClaimWalletDeploymentRequestSchema,
 	ClaimWalletDeploymentResponseSchema,
-	DeployWalletsRequestSchema,
 	DeployWalletsResponseSchema,
+	DeployWalletsSettleRequestSchema,
+	DeployWalletsVerifyRequestSchema,
+	DeployWalletsVerifyResponseSchema,
 	GetWalletsByOwnerResponseSchema,
 	HealthResponseSchema,
 	SettleRequestSchema,
@@ -18,12 +20,13 @@ import {
 } from '../../schema/b402'
 import {
 	claimWalletDeployment,
-	deployWallets,
 	getWalletsByOwner,
 	health,
 	settle,
+	settleWalletDeployment,
 	settleWalletPayment,
 	verify,
+	verifyWalletDeployment,
 	verifyWalletPayment
 } from './b402Controller'
 
@@ -83,16 +86,29 @@ export const register = (server: FastifyInstance, _: any, next: any) => {
 	)
 
 	server.post(
-		'/wallet/deploy',
+		'/wallet/deploy/verify',
 		{
 			schema: {
-				body: DeployWalletsRequestSchema,
+				body: DeployWalletsVerifyRequestSchema,
+				response: {
+					200: DeployWalletsVerifyResponseSchema
+				}
+			}
+		},
+		verifyWalletDeployment
+	)
+
+	server.post(
+		'/wallet/deploy/settle',
+		{
+			schema: {
+				body: DeployWalletsSettleRequestSchema,
 				response: {
 					200: DeployWalletsResponseSchema
 				}
 			}
 		},
-		deployWallets
+		settleWalletDeployment
 	)
 
 	server.post(
