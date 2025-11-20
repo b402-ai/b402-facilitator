@@ -48,11 +48,7 @@ export const PaymentRequirementsSchema = {
 					minItems: 1,
 					maxItems: 10
 				},
-				fundingAmounts: {
-					type: 'array',
-					items: { type: 'string' },
-					maxItems: 10
-				}
+				fundingRequested: { type: 'boolean' }
 			},
 			required: ['ownerAddress', 'salts'],
 			additionalProperties: false
@@ -124,8 +120,8 @@ export const HealthResponseSchema = {
 	additionalProperties: false
 } as const
 
-// POST /wallet/deploy/verify - Request
-export const DeployWalletsVerifyRequestSchema = {
+// POST /deploy/verify - Request (EOA payment)
+export const DeployEOAVerifyRequestSchema = {
 	type: 'object',
 	properties: {
 		paymentPayload: {
@@ -137,6 +133,17 @@ export const DeployWalletsVerifyRequestSchema = {
 		paymentRequirements: PaymentRequirementsSchema
 	},
 	required: ['paymentPayload', 'paymentRequirements'],
+	additionalProperties: false
+} as const
+
+// POST /deploy/wallet/verify - Request (Smart wallet payment)
+export const DeployWalletVerifyRequestSchema = {
+	type: 'object',
+	properties: {
+		userOp: { type: 'object' }, // UserOperation - not fully validated here
+		paymentRequirements: PaymentRequirementsSchema
+	},
+	required: ['userOp', 'paymentRequirements'],
 	additionalProperties: false
 } as const
 
@@ -169,8 +176,8 @@ export const DeployWalletsVerifyResponseSchema = {
 	additionalProperties: false
 } as const
 
-// POST /wallet/deploy/settle - Request
-export const DeployWalletsSettleRequestSchema = {
+// POST /deploy/settle - Request (EOA payment)
+export const DeployEOASettleRequestSchema = {
 	type: 'object',
 	properties: {
 		paymentPayload: {
@@ -198,6 +205,34 @@ export const DeployWalletsSettleRequestSchema = {
 		}
 	},
 	required: ['paymentPayload', 'paymentRequirements', 'wallets'],
+	additionalProperties: false
+} as const
+
+// POST /deploy/wallet/settle - Request (Smart wallet payment)
+export const DeployWalletSettleRequestSchema = {
+	type: 'object',
+	properties: {
+		userOp: { type: 'object' },
+		signature: { type: 'string' },
+		paymentRequirements: PaymentRequirementsSchema,
+		wallets: {
+			type: 'array',
+			items: {
+				type: 'object',
+				properties: {
+					address: { type: 'string' },
+					salt: { type: 'string' },
+					owner: { type: 'string' },
+					fundingAmount: { type: 'string' }
+				},
+				required: ['address', 'salt', 'owner'],
+				additionalProperties: false
+			},
+			minItems: 1,
+			maxItems: 10
+		}
+	},
+	required: ['userOp', 'signature', 'paymentRequirements', 'wallets'],
 	additionalProperties: false
 } as const
 
@@ -609,7 +644,7 @@ export interface PaymentRequirements {
 	deployment?: {
 		ownerAddress: string
 		salts: string[]
-		fundingAmounts?: string[]
+		fundingRequested?: boolean
 	}
 }
 
@@ -653,11 +688,32 @@ export interface DeployedWallet {
 	deploymentTxHash?: string
 }
 
-export interface DeployWalletsVerifyRequest {
+// EOA deployment interfaces
+export interface DeployEOAVerifyRequest {
 	paymentPayload: PaymentPayload[]
 	paymentRequirements: PaymentRequirements
 }
 
+export interface DeployEOASettleRequest {
+	paymentPayload: PaymentPayload[]
+	paymentRequirements: PaymentRequirements
+	wallets: Array<Omit<DeployedWallet, 'deploymentTxHash'> & { fundingAmount?: string }>
+}
+
+// Smart wallet deployment interfaces
+export interface DeployWalletVerifyRequest {
+	userOp: UserOperation
+	paymentRequirements: PaymentRequirements
+}
+
+export interface DeployWalletSettleRequest {
+	userOp: UserOperation
+	signature: string
+	paymentRequirements: PaymentRequirements
+	wallets: Array<Omit<DeployedWallet, 'deploymentTxHash'> & { fundingAmount?: string }>
+}
+
+// Common response interface (used by both EOA and smart wallet)
 export interface DeployWalletsVerifyResponse {
 	isValid: boolean
 	payer?: string
@@ -666,12 +722,6 @@ export interface DeployWalletsVerifyResponse {
 	fundingFees?: string
 	totalFees?: string
 	invalidReason?: string
-}
-
-export interface DeployWalletsSettleRequest {
-	paymentPayload: PaymentPayload[]
-	paymentRequirements: PaymentRequirements
-	wallets: Array<Omit<DeployedWallet, 'deploymentTxHash'> & { fundingAmount?: string }>
 }
 
 export interface DeployWalletsResponse {

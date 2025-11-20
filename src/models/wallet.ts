@@ -13,6 +13,18 @@ export interface IWalletDeployment {
 	fundingRequested: boolean
 	fundingCompleted: boolean
 	fundingTxHash?: string
+	fundingPaymentData?: {
+		token: string
+		authorization: {
+			from: string
+			to: string
+			value: string
+			validAfter: number
+			validBefore: number
+			nonce: string
+		}
+		signature: string
+	}
 	createdAt: Date
 	updatedAt: Date
 }
@@ -81,6 +93,10 @@ const WalletDeploymentSchema = new mongoose.Schema<IWalletDeployment>(
 			type: String,
 			trim: true,
 			lowercase: true
+		},
+		fundingPaymentData: {
+			type: mongoose.Schema.Types.Mixed,
+			required: false
 		}
 	},
 	{

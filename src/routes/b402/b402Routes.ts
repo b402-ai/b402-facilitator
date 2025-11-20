@@ -3,9 +3,11 @@ import type { FastifyInstance } from 'fastify'
 import {
 	ClaimWalletDeploymentRequestSchema,
 	ClaimWalletDeploymentResponseSchema,
+	DeployEOASettleRequestSchema,
+	DeployEOAVerifyRequestSchema,
+	DeployWalletSettleRequestSchema,
+	DeployWalletVerifyRequestSchema,
 	DeployWalletsResponseSchema,
-	DeployWalletsSettleRequestSchema,
-	DeployWalletsVerifyRequestSchema,
 	DeployWalletsVerifyResponseSchema,
 	GetWalletsByOwnerResponseSchema,
 	HealthResponseSchema,
@@ -23,10 +25,12 @@ import {
 	getWalletsByOwner,
 	health,
 	settle,
-	settleWalletDeployment,
+	settleDeploymentByEOA,
+	settleDeploymentByWallet,
 	settleWalletPayment,
 	verify,
-	verifyWalletDeployment,
+	verifyDeploymentByEOA,
+	verifyDeploymentByWallet,
 	verifyWalletPayment
 } from './b402Controller'
 
@@ -85,30 +89,58 @@ export const register = (server: FastifyInstance, _: any, next: any) => {
 		settleWalletPayment
 	)
 
+	// Wallet Deployment Routes - EOA (EIP712) Payment
 	server.post(
-		'/wallet/deploy/verify',
+		'/deploy/verify',
 		{
 			schema: {
-				body: DeployWalletsVerifyRequestSchema,
+				body: DeployEOAVerifyRequestSchema,
 				response: {
 					200: DeployWalletsVerifyResponseSchema
 				}
 			}
 		},
-		verifyWalletDeployment
+		verifyDeploymentByEOA
 	)
 
 	server.post(
-		'/wallet/deploy/settle',
+		'/deploy/settle',
 		{
 			schema: {
-				body: DeployWalletsSettleRequestSchema,
+				body: DeployEOASettleRequestSchema,
 				response: {
 					200: DeployWalletsResponseSchema
 				}
 			}
 		},
-		settleWalletDeployment
+		settleDeploymentByEOA
+	)
+
+	// Wallet Deployment Routes - Smart Wallet Payment
+	server.post(
+		'/deploy/wallet/verify',
+		{
+			schema: {
+				body: DeployWalletVerifyRequestSchema,
+				response: {
+					200: DeployWalletsVerifyResponseSchema
+				}
+			}
+		},
+		verifyDeploymentByWallet
+	)
+
+	server.post(
+		'/deploy/wallet/settle',
+		{
+			schema: {
+				body: DeployWalletSettleRequestSchema,
+				response: {
+					200: DeployWalletsResponseSchema
+				}
+			}
+		},
+		settleDeploymentByWallet
 	)
 
 	server.post(

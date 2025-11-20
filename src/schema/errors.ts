@@ -264,6 +264,10 @@ const errorCodesConfig = {
 		code: 'wallet_error' as const,
 		message: 'Payment already exists for this wallet address'
 	},
+	ERR_WALLET_ALREADY_DEPLOYED: {
+		code: 'wallet_error' as const,
+		message: 'Wallet for this address has already been deployed'
+	},
 	ERR_MISSING_DEPLOYMENT_PARAMS: {
 		code: 'validation_error' as const,
 		message: 'Missing deployment parameters (ownerAddress and salt required)'

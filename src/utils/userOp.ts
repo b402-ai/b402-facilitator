@@ -1,9 +1,10 @@
 import { ethers } from 'ethers'
 
 import { B402_RELAYER_ABI, SUPPORTED_TOKENS } from '../constants'
+import type { UserOperation } from '../schema/b402'
 import { env } from '../schema/env'
 import { BaseErrors } from '../schema/errors'
-import type { BatchCall, UserOperationParams } from '../types/wallet'
+import type { BatchCall } from '../types/wallet'
 import { getProvider, getTokenAllowance, getWalletNonce, isWalletDeployed } from './wallet'
 
 const SIMPLE_ACCOUNT_ABI = [
@@ -55,7 +56,7 @@ export async function createPaymentUserOpOrThrow(params: {
 	validAfter: number
 	validBefore: number
 	nonce: string
-}): Promise<UserOperationParams> {
+}): Promise<UserOperation> {
 	const {
 		walletAddress,
 		recipients,
@@ -173,7 +174,7 @@ export async function createPaymentUserOpOrThrow(params: {
 	const maxFeePerGas = (baseGasPrice * 12n) / 10n
 	const maxPriorityFeePerGas = ethers.parseUnits('0.4', 'gwei')
 
-	const userOp: UserOperationParams = {
+	const userOp: UserOperation = {
 		sender: walletAddress,
 		nonce: ethers.toBeHex(nonce),
 		factory: undefined,
@@ -194,7 +195,7 @@ export async function createPaymentUserOpOrThrow(params: {
 	return userOp
 }
 
-export function validateFeeIncluded(userOp: UserOperationParams): boolean {
+export function validateFeeIncluded(userOp: UserOperation): boolean {
 	try {
 		const calls = decodeExecuteBatch(userOp.callData)
 		const hasBatchTransferWithFee = calls.some((call) => {
@@ -238,7 +239,7 @@ export function validateFeeIncluded(userOp: UserOperationParams): boolean {
 }
 
 // TODO: Consider using gas estimation after building a valid UserOp to refine the final estimate
-export async function estimateUserOpGas(userOp: UserOperationParams): Promise<{
+export async function estimateUserOpGas(userOp: UserOperation): Promise<{
 	callGasLimit: string
 	verificationGasLimit: string
 	preVerificationGas: string
@@ -293,7 +294,7 @@ export async function estimateUserOpGas(userOp: UserOperationParams): Promise<{
 	return result.result
 }
 
-export async function submitUserOpToBundler(userOp: UserOperationParams): Promise<string> {
+export async function submitUserOpToBundler(userOp: UserOperation): Promise<string> {
 	const response = await fetch(env.BUNDLER_RPC_URL, {
 		method: 'POST',
 		headers: {

@@ -4,9 +4,11 @@ import type { FastifyReply, FastifyRequest } from 'fastify'
 import { B402_RELAYER_ABI, SUPPORTED_TOKENS } from '../../constants'
 import { WalletDeployment } from '../../models'
 import type {
+	DeployEOASettleRequest,
+	DeployEOAVerifyRequest,
+	DeployWalletSettleRequest,
+	DeployWalletVerifyRequest,
 	DeployWalletsResponse,
-	DeployWalletsSettleRequest,
-	DeployWalletsVerifyRequest,
 	DeployWalletsVerifyResponse,
 	HealthResponse,
 	SettleRequest,
@@ -417,42 +419,17 @@ export async function settleWalletPayment(request: FastifyRequest, reply: Fastif
 }
 
 /**
- * Function for route `/health`
- * Health check endpoint returning service status and relayer info
+ * Function for route `/deploy/verify`
+ * Verify payment for wallet deployment via EOA
+ * Note: Uses EIP712
  *
  * @param request
  * @param reply
  * @returns
  */
-export async function health(request: FastifyRequest, reply: FastifyReply) {
+export async function verifyDeploymentByEOA(request: FastifyRequest, reply: FastifyReply) {
 	try {
-		const relayerWallet = new Wallet(request.server.config.RELAYER_PRIVATE_KEY)
-		const providerService = getProviderService()
-		const network = providerService.getNetwork()
-
-		const response: HealthResponse = {
-			status: 'healthy',
-			service: 'b402-facilitator',
-			network,
-			relayer: relayerWallet.address
-		}
-		return response
-	} catch (error) {
-		return handleAndReturnErrorResponse(reply, error)
-	}
-}
-
-/**
- * Function for route `/wallet/deploy/verify`
- * Verify payment and generate wallet addresses for deployment
- *
- * @param request
- * @param reply
- * @returns
- */
-export async function verifyWalletDeployment(request: FastifyRequest, reply: FastifyReply) {
-	try {
-		const body = request.body as DeployWalletsVerifyRequest
+		const body = request.body as DeployEOAVerifyRequest
 		const { paymentPayload, paymentRequirements } = body
 
 		// Validate deployment config exists
@@ -460,7 +437,7 @@ export async function verifyWalletDeployment(request: FastifyRequest, reply: Fas
 			throw new BaseErrors.ERR_MISSING_DEPLOYMENT_PARAMS()
 		}
 
-		const { ownerAddress, salts, fundingAmounts } = paymentRequirements.deployment
+		const { ownerAddress, salts, fundingRequested } = paymentRequirements.deployment
 
 		// Validate owner address
 		if (!ethers.isAddress(ownerAddress)) {
@@ -472,26 +449,27 @@ export async function verifyWalletDeployment(request: FastifyRequest, reply: Fas
 			throw new BaseErrors.ERR_INVALID_WALLET_COUNT()
 		}
 
-		const count = salts.length
+		const count = salts.length // Total wallets that will be deployed
 
-		// Validate funding amounts if provided
-		if (fundingAmounts && fundingAmounts.length !== count) {
+		// Validate payment array structure
+		const expectedPaymentCount = fundingRequested ? count + 1 : 1 // 1 fee payment to us for wallet deployment + (optionally) `count` funding payments for wallets
+		if (paymentPayload.length !== expectedPaymentCount) {
 			throw new BaseErrors.ERR_ARRAY_LENGTH_MISMATCH()
 		}
 
-		// Validate payment array structure
-		const expectedPaymentCount = fundingAmounts ? count + 1 : 1 // 1 fee payment + N funding payments
-		if (paymentPayload.length !== expectedPaymentCount) {
-			throw new BaseErrors.ERR_ARRAY_LENGTH_MISMATCH()
+		// Extract funding amounts from payment payloads if funding is requested
+		const fundingAmounts: string[] = []
+		if (fundingRequested) {
+			for (let i = 1; i < paymentPayload.length; i++) {
+				fundingAmounts.push(paymentPayload[i].payload.authorization.value)
+			}
 		}
 
 		// Calculate fees
 		const deploymentFeePerWallet = Number.parseFloat(env.WALLET_DEPLOYMENT_FEE)
 		const totalDeploymentFee = (count * deploymentFeePerWallet).toFixed(2)
 		const fundingFeePerWallet = Number.parseFloat(env.WALLET_PAYMENT_FEE)
-		const totalFundingFees = fundingAmounts
-			? (fundingAmounts.length * fundingFeePerWallet).toFixed(2)
-			: '0'
+		const totalFundingFees = fundingRequested ? (count * fundingFeePerWallet).toFixed(2) : '0'
 		const totalFees = (
 			Number.parseFloat(totalDeploymentFee) + Number.parseFloat(totalFundingFees)
 		).toFixed(2)
@@ -520,22 +498,27 @@ export async function verifyWalletDeployment(request: FastifyRequest, reply: Fas
 			]
 		}
 
-		// Validate first payment (deployment fee + funding fees to WALLET_FEE_RECIPIENT)
+		// Verify the first payment (deployment fees + funding fees to us)
 		const feePayment = paymentPayload[0]
 		const { authorization: feeAuth, signature: feeSignature } = feePayment.payload
 
-		// Verify fee payment recipient
 		if (feeAuth.to.toLowerCase() !== env.WALLET_FEE_RECIPIENT.toLowerCase()) {
 			throw new BaseErrors.ERR_INVALID_FEE_RECIPIENT()
 		}
 
-		// Verify fee payment amount
-		const feePaymentAmount = Number.parseFloat(feeAuth.value)
-		if (feePaymentAmount !== Number.parseFloat(totalFees)) {
+		// Get token config for decimal conversion
+		const tokenConfig = Object.values(SUPPORTED_TOKENS).find(
+			(t) => t.address.toLowerCase() === feePayment.token.toLowerCase()
+		)
+		if (!tokenConfig) {
+			throw new BaseErrors.ERR_UNSUPPORTED_TOKEN()
+		}
+
+		const feePaymentAmount = ethers.formatUnits(feeAuth.value, tokenConfig.decimals)
+		if (Number.parseFloat(feePaymentAmount) !== Number.parseFloat(totalFees)) {
 			throw new BaseErrors.ERR_INCORRECT_DEPLOYMENT_FEE()
 		}
 
-		// Verify fee payment signature
 		const feeMessage = {
 			token: feePayment.token,
 			...feeAuth
@@ -562,8 +545,6 @@ export async function verifyWalletDeployment(request: FastifyRequest, reply: Fas
 
 		for (let i = 0; i < count; i++) {
 			const saltStr = salts[i]
-
-			// Compute wallet address from salt
 			const callData = factoryInterface.encodeFunctionData('getAddress', [
 				ownerAddress,
 				BigInt(saltStr)
@@ -577,7 +558,7 @@ export async function verifyWalletDeployment(request: FastifyRequest, reply: Fas
 			// Validate wallet is not already deployed
 			const exists = await isWalletDeployed(walletAddress)
 			if (exists) {
-				throw new BaseErrors.ERR_WALLET_ALREADY_PAID()
+				throw new BaseErrors.ERR_WALLET_ALREADY_DEPLOYED()
 			}
 
 			const wallet = {
@@ -590,9 +571,9 @@ export async function verifyWalletDeployment(request: FastifyRequest, reply: Fas
 		}
 
 		// Verify funding payment signatures if funding is requested
-		if (fundingAmounts) {
+		if (fundingRequested && fundingAmounts.length > 0) {
 			for (let i = 0; i < fundingAmounts.length; i++) {
-				const fundingPayment = paymentPayload[i + 1] // +1 because first payment is fees
+				const fundingPayment = paymentPayload[i + 1] // +1 because first payment is fees to us
 				const wallet = wallets[i]
 				const { authorization: fundingAuth, signature: fundingSignature } = fundingPayment.payload
 
@@ -606,11 +587,6 @@ export async function verifyWalletDeployment(request: FastifyRequest, reply: Fas
 				const expectedFundingAmount = Number.parseFloat(fundingAmounts[i])
 				if (fundingPaymentAmount !== expectedFundingAmount) {
 					throw new BaseErrors.ERR_INVALID_AMOUNT()
-				}
-
-				// Verify funding payment from same payer
-				if (fundingAuth.from.toLowerCase() !== payer.toLowerCase()) {
-					throw new BaseErrors.ERR_SIGNATURE_VERIFICATION_FAILED()
 				}
 
 				// Verify funding payment signature
@@ -646,25 +622,26 @@ export async function verifyWalletDeployment(request: FastifyRequest, reply: Fas
 }
 
 /**
- * Function for route `/wallet/deploy/settle`
- * Deploy one or more smart wallets for any given EOA
- * Note: Gas and API fee are paid by caller, which can be different from target EOA
+ * Function for route `/deploy/settle`
+ * Execute payment and deploy wallets via EOA
+ * Note: Uses EIP712
  *
  * @param request
  * @param reply
  * @returns
  */
-export async function settleWalletDeployment(request: FastifyRequest, reply: FastifyReply) {
+export async function settleDeploymentByEOA(request: FastifyRequest, reply: FastifyReply) {
 	try {
-		const body = request.body as DeployWalletsSettleRequest
-		const { wallets, paymentPayload } = body
+		const body = request.body as DeployEOASettleRequest
+		const { paymentPayload, paymentRequirements, wallets } = body
 
-		// Validate wallets array
-		if (!wallets || wallets.length === 0) {
-			throw new BaseErrors.ERR_INVALID_WALLET_COUNT()
+		// Validate deployment config exists
+		if (!paymentRequirements.deployment) {
+			throw new BaseErrors.ERR_MISSING_DEPLOYMENT_PARAMS()
 		}
 
-		if (wallets.length > 10) {
+		// Validate wallets array
+		if (!wallets || wallets.length < 1 || wallets.length > 10) {
 			throw new BaseErrors.ERR_INVALID_WALLET_COUNT()
 		}
 
@@ -678,17 +655,79 @@ export async function settleWalletDeployment(request: FastifyRequest, reply: Fas
 			}
 		}
 
-		// Calculate deployment fee
-		const deploymentFeePerWallet = Number.parseFloat(env.WALLET_DEPLOYMENT_FEE)
-		const totalDeploymentFee = (wallets.length * deploymentFeePerWallet).toFixed(2)
+		// Extract funding amounts from payment payloads if funding is requested
+		const fundingAmounts: string[] = []
+		const hasFunding = paymentPayload.length > 1
+		if (hasFunding) {
+			for (let i = 1; i < paymentPayload.length; i++) {
+				fundingAmounts.push(paymentPayload[i].payload.authorization.value)
+			}
+		}
 
-		// Get first payment (fees) authorization and signature
+		// Calculate and validate fees
+		const count = wallets.length
+		const deploymentFeePerWallet = Number.parseFloat(env.WALLET_DEPLOYMENT_FEE)
+		const totalDeploymentFee = (count * deploymentFeePerWallet).toFixed(2)
+		const fundingFeePerWallet = Number.parseFloat(env.WALLET_PAYMENT_FEE)
+		const totalFundingFees = hasFunding
+			? (fundingAmounts.length * fundingFeePerWallet).toFixed(2)
+			: '0'
+		const totalFees = (
+			Number.parseFloat(totalDeploymentFee) + Number.parseFloat(totalFundingFees)
+		).toFixed(2)
+
+		// Get first payment (fees to us) authorization and signature
 		const feePayment = paymentPayload[0]
 		const { authorization, signature } = feePayment.payload
 
-		// Get provider
+		// Validate fee payment recipient
+		if (authorization.to.toLowerCase() !== env.WALLET_FEE_RECIPIENT.toLowerCase()) {
+			throw new BaseErrors.ERR_INVALID_FEE_RECIPIENT()
+		}
+
+		// Get token config for decimal conversion
+		const tokenConfig = Object.values(SUPPORTED_TOKENS).find(
+			(t) => t.address.toLowerCase() === feePayment.token.toLowerCase()
+		)
+		if (!tokenConfig) {
+			throw new BaseErrors.ERR_UNSUPPORTED_TOKEN()
+		}
+
+		// Validate fee payment amount matches calculated fees
+		const feePaymentAmount = ethers.formatUnits(authorization.value, tokenConfig.decimals)
+		if (Number.parseFloat(feePaymentAmount) !== Number.parseFloat(totalFees)) {
+			throw new BaseErrors.ERR_INCORRECT_DEPLOYMENT_FEE()
+		}
+
+		// Get provider and relayer contract for nonce checks
 		const providerService = getProviderService()
 		const provider = providerService.getProvider()
+		const relayer = new Contract(
+			request.server.config.B402_RELAYER_ADDRESS,
+			B402_RELAYER_ABI,
+			provider
+		)
+
+		// Validate all nonces are not already used
+		// Check fee payment nonce
+		const feeNonceUsed = await relayer.authorizationState(authorization.from, authorization.nonce)
+		if (feeNonceUsed) {
+			throw new BaseErrors.ERR_NONCE_ALREADY_USED()
+		}
+
+		// Check funding payment nonces if funding is requested
+		if (hasFunding) {
+			for (let i = 1; i < paymentPayload.length; i++) {
+				const fundingAuth = paymentPayload[i].payload.authorization
+				const fundingNonceUsed = await relayer.authorizationState(
+					fundingAuth.from,
+					fundingAuth.nonce
+				)
+				if (fundingNonceUsed) {
+					throw new BaseErrors.ERR_NONCE_ALREADY_USED()
+				}
+			}
+		}
 
 		// Prevent paying for the same wallet multiple times
 		const walletAddressesToCheck = wallets.map((w) => w.address.toLowerCase())
@@ -700,26 +739,10 @@ export async function settleWalletDeployment(request: FastifyRequest, reply: Fas
 			throw new BaseErrors.ERR_WALLET_ALREADY_PAID()
 		}
 
-		// Create DB entries for wallets before payment
-		const dbEntries = await WalletDeployment.insertMany(
-			wallets.map((wallet) => ({
-				ownerAddress: wallet.owner.toLowerCase(),
-				walletAddress: wallet.address.toLowerCase(),
-				salt: wallet.salt,
-				payerAddress: authorization.from.toLowerCase(),
-				paymentTxHash: '', // Will update after payment
-				paymentCompleted: false,
-				deploymentCompleted: false,
-				fundingAmount: wallet.fundingAmount,
-				fundingRequested: !!wallet.fundingAmount,
-				fundingCompleted: false
-			}))
-		)
-
-		// Execute b402 fee payment first (deployment fee + funding fees)
+		// Execute fee payment to us first (deployment fee + funding fees)
 		const relayerWallet = new Wallet(request.server.config.RELAYER_PRIVATE_KEY)
 		const signer = relayerWallet.connect(provider)
-		const relayer = new Contract(
+		const relayerWithSigner = new Contract(
 			request.server.config.B402_RELAYER_ADDRESS,
 			B402_RELAYER_ABI,
 			signer
@@ -727,7 +750,7 @@ export async function settleWalletDeployment(request: FastifyRequest, reply: Fas
 
 		let paymentTxHash = ''
 		try {
-			const paymentTx = await relayer.transferWithAuthorization(
+			const paymentTx = await relayerWithSigner.transferWithAuthorization(
 				feePayment.token,
 				authorization.from,
 				authorization.to,
@@ -743,22 +766,42 @@ export async function settleWalletDeployment(request: FastifyRequest, reply: Fas
 			const paymentReceipt = await paymentTx.wait()
 			paymentTxHash = paymentReceipt?.hash || paymentTx.hash
 		} catch (error) {
-			// Clear DB entries if payment fails
-			const walletAddresses = dbEntries.map((entry) => entry.walletAddress)
-			await WalletDeployment.deleteMany({ walletAddress: { $in: walletAddresses } })
+			console.log(JSON.stringify(error))
 			throw new BaseErrors.ERR_BLOCKCHAIN_TRANSACTION_FAILED()
 		}
 
-		// Update DB entries with payment completion
-		const walletAddresses = dbEntries.map((entry) => entry.walletAddress)
-		await WalletDeployment.updateMany(
-			{ walletAddress: { $in: walletAddresses } },
-			{
-				$set: {
+		// Create DB entries for wallets after successful payment
+		// For EOA deployments with funding, store the funding payment data for potential retry via /claim
+		await WalletDeployment.insertMany(
+			wallets.map((wallet) => {
+				// Find the funding payment for this wallet
+				const fundingPayment = hasFunding
+					? paymentPayload.find(
+							(p) => p.payload.authorization.to.toLowerCase() === wallet.address.toLowerCase()
+						)
+					: undefined
+
+				return {
+					ownerAddress: wallet.owner.toLowerCase(),
+					walletAddress: wallet.address.toLowerCase(),
+					salt: wallet.salt,
+					payerAddress: authorization.from.toLowerCase(),
 					paymentTxHash: paymentTxHash.toLowerCase(),
-					paymentCompleted: true
+					paymentCompleted: true,
+					deploymentCompleted: false,
+					fundingAmount: wallet.fundingAmount,
+					fundingRequested: !!wallet.fundingAmount,
+					fundingCompleted: false,
+					// Store funding payment data for retry in case funding fails
+					...(fundingPayment && {
+						fundingPaymentData: {
+							token: fundingPayment.token,
+							authorization: fundingPayment.payload.authorization,
+							signature: fundingPayment.payload.signature
+						}
+					})
 				}
-			}
+			})
 		)
 
 		// Deploy wallets and track results
@@ -795,17 +838,6 @@ export async function settleWalletDeployment(request: FastifyRequest, reply: Fas
 				const receipt = await deploymentTx.wait()
 				const deploymentTxHash = receipt?.hash || deploymentTx.hash
 
-				// Update DB for this specific wallet
-				await WalletDeployment.updateOne(
-					{ walletAddress: wallet.address.toLowerCase() },
-					{
-						$set: {
-							deploymentTxHash: deploymentTxHash.toLowerCase(),
-							deploymentCompleted: true
-						}
-					}
-				)
-
 				successfulWallets.push({
 					address: wallet.address,
 					salt: wallet.salt,
@@ -819,7 +851,24 @@ export async function settleWalletDeployment(request: FastifyRequest, reply: Fas
 					owner: wallet.owner
 				})
 				// Continue to next wallet, don't throw and support total failures + partial successes
+				// Note: Failed wallet deployments can be retried via the `/claim` route
 			}
+		}
+
+		// Batch update deployment status for all successful wallets
+		if (successfulWallets.length > 0) {
+			const bulkOps = successfulWallets.map((wallet) => ({
+				updateOne: {
+					filter: { walletAddress: wallet.address.toLowerCase() },
+					update: {
+						$set: {
+							deploymentTxHash: wallet.deploymentTxHash.toLowerCase(),
+							deploymentCompleted: true
+						}
+					}
+				}
+			}))
+			await WalletDeployment.bulkWrite(bulkOps)
 		}
 
 		// Execute funding payments for successfully deployed wallets
@@ -830,67 +879,528 @@ export async function settleWalletDeployment(request: FastifyRequest, reply: Fas
 			fundingAmount: string
 		}> = []
 
-		for (let i = 0; i < successfulWallets.length; i++) {
-			const wallet = successfulWallets[i]
-			const originalWallet = wallets[i]
+		const successfulFundings: Array<{
+			address: string
+			fundingTxHash: string
+			fundingAmount: string
+		}> = []
 
-			if (originalWallet.fundingAmount && paymentPayload[i + 1]) {
-				try {
-					const fundingPayment = paymentPayload[i + 1]
-					const { authorization: fundingAuth, signature: fundingSignature } = fundingPayment.payload
+		if (hasFunding) {
+			for (const wallet of successfulWallets) {
+				// Find the funding payment for this specific wallet by matching recipient address
+				const fundingPayment = paymentPayload.find(
+					(p) => p.payload.authorization.to.toLowerCase() === wallet.address.toLowerCase()
+				)
 
-					const fundingTx = await relayer.transferWithAuthorization(
-						fundingPayment.token,
-						fundingAuth.from,
-						fundingAuth.to,
-						fundingAuth.value,
-						fundingAuth.validAfter,
-						fundingAuth.validBefore,
-						fundingAuth.nonce,
-						fundingSignature,
-						{
-							gasLimit: 200000
-						}
-					)
-					const fundingReceipt = await fundingTx.wait()
-					const fundingTxHash = fundingReceipt?.hash || fundingTx.hash
+				if (fundingPayment) {
+					try {
+						const { authorization: fundingAuth, signature: fundingSignature } =
+							fundingPayment.payload
 
-					// Update DB
-					await WalletDeployment.updateOne(
-						{ walletAddress: wallet.address.toLowerCase() },
-						{
+						const fundingTx = await relayerWithSigner.transferWithAuthorization(
+							fundingPayment.token,
+							fundingAuth.from,
+							fundingAuth.to,
+							fundingAuth.value,
+							fundingAuth.validAfter,
+							fundingAuth.validBefore,
+							fundingAuth.nonce,
+							fundingSignature,
+							{
+								gasLimit: 200000
+							}
+						)
+						const fundingReceipt = await fundingTx.wait()
+						const fundingTxHash = fundingReceipt?.hash || fundingTx.hash
+
+						successfulFundings.push({
+							address: wallet.address,
+							fundingTxHash,
+							fundingAmount: fundingAuth.value
+						})
+
+						wallet.fundingAmount = fundingAuth.value
+						wallet.fundingTxHash = fundingTxHash
+						wallet.fundingCompleted = true
+					} catch (error) {
+						// Note: Failed fundings can be retried via the `/claim` route
+						failedFundings.push({
+							address: wallet.address,
+							salt: wallet.salt,
+							owner: wallet.owner,
+							fundingAmount: fundingPayment.payload.authorization.value
+						})
+						wallet.fundingCompleted = false
+					}
+				}
+			}
+
+			// Batch update funding status for all successful fundings
+			if (successfulFundings.length > 0) {
+				const fundingBulkOps = successfulFundings.map((funding) => ({
+					updateOne: {
+						filter: { walletAddress: funding.address.toLowerCase() },
+						update: {
 							$set: {
-								fundingTxHash: fundingTxHash.toLowerCase(),
+								fundingTxHash: funding.fundingTxHash.toLowerCase(),
 								fundingCompleted: true
 							}
 						}
-					)
+					}
+				}))
+				await WalletDeployment.bulkWrite(fundingBulkOps)
+			}
+		}
 
-					// Add funding info to success wallet
-					wallet.fundingAmount = originalWallet.fundingAmount
-					wallet.fundingTxHash = fundingTxHash
-					wallet.fundingCompleted = true
-				} catch (error) {
-					failedFundings.push({
-						address: wallet.address,
-						salt: wallet.salt,
-						owner: wallet.owner,
-						fundingAmount: originalWallet.fundingAmount || ''
-					})
-					// Mark wallet as funded=false even though deployed
-					wallet.fundingAmount = originalWallet.fundingAmount
-					wallet.fundingCompleted = false
+		// Determine overall success flags
+		const paymentSuccess = true // Payment completed successfully
+		const deploymentSuccess = successfulWallets.length === wallets.length
+		const fundingSuccess = failedFundings.length === 0
+
+		const response: DeployWalletsResponse = {
+			paymentSuccess,
+			deploymentSuccess,
+			fundingSuccess,
+			wallets: successfulWallets,
+			failedWallets,
+			failedFundings,
+			paymentTxHash,
+			deploymentFee: totalDeploymentFee
+		}
+
+		return response
+	} catch (error) {
+		return handleAndReturnErrorResponse(reply, error)
+	}
+}
+
+/**
+ * Function for route `/deploy/wallet/verify`
+ * Verify smart wallet payment for wallet deployment
+ *
+ * @param request
+ * @param reply
+ * @returns
+ */
+export async function verifyDeploymentByWallet(request: FastifyRequest, reply: FastifyReply) {
+	try {
+		const body = request.body as DeployWalletVerifyRequest
+		const { userOp, paymentRequirements } = body
+
+		// Extract payer wallet address from UserOp sender
+		const payerWalletAddress = userOp.sender.toLowerCase()
+
+		// Validate deployment config exists
+		if (!paymentRequirements.deployment) {
+			throw new BaseErrors.ERR_MISSING_DEPLOYMENT_PARAMS()
+		}
+
+		const { ownerAddress, salts, fundingRequested } = paymentRequirements.deployment
+
+		// Validate owner address
+		if (!ethers.isAddress(ownerAddress)) {
+			throw new BaseErrors.ERR_INVALID_ADDRESS()
+		}
+
+		// Validate payer wallet address from UserOp
+		if (!ethers.isAddress(payerWalletAddress)) {
+			throw new BaseErrors.ERR_INVALID_ADDRESS()
+		}
+
+		// Validate salts array
+		if (!salts || salts.length < 1 || salts.length > 10) {
+			throw new BaseErrors.ERR_INVALID_WALLET_COUNT()
+		}
+
+		const count = salts.length
+
+		// Calculate fees
+		const deploymentFeePerWallet = Number.parseFloat(env.WALLET_DEPLOYMENT_FEE)
+		const totalDeploymentFee = (count * deploymentFeePerWallet).toFixed(2)
+		const fundingFeePerWallet = Number.parseFloat(env.WALLET_PAYMENT_FEE)
+		const totalFundingFees = fundingRequested ? (count * fundingFeePerWallet).toFixed(2) : '0'
+		const totalFees = (
+			Number.parseFloat(totalDeploymentFee) + Number.parseFloat(totalFundingFees)
+		).toFixed(2)
+
+		// Get provider
+		const providerService = getProviderService()
+		const provider = providerService.getProvider()
+
+		// Compute wallet addresses from client-provided salts
+		const factoryInterface = new ethers.Interface([
+			'function getAddress(address owner, uint256 salt) view returns (address)'
+		])
+
+		const wallets: Array<{ address: string; salt: string; owner: string; fundingAmount?: string }> =
+			[]
+
+		for (let i = 0; i < count; i++) {
+			const saltStr = salts[i]
+
+			// Compute wallet address from salt
+			const callData = factoryInterface.encodeFunctionData('getAddress', [
+				ownerAddress,
+				BigInt(saltStr)
+			])
+			const result = await provider.call({
+				to: env.SIMPLE_ACCOUNT_FACTORY_ADDRESS,
+				data: callData
+			})
+			const computedWalletAddress = factoryInterface.decodeFunctionResult('getAddress', result)[0]
+
+			// Validate wallet is not already deployed
+			const exists = await isWalletDeployed(computedWalletAddress)
+			if (exists) {
+				throw new BaseErrors.ERR_WALLET_ALREADY_PAID()
+			}
+
+			wallets.push({
+				address: computedWalletAddress,
+				salt: saltStr,
+				owner: ownerAddress
+			})
+		}
+
+		// Validate UserOp contains correct multicall structure
+		if (!userOp.callData || userOp.callData === '0x') {
+			throw new BaseErrors.ERR_INVALID_USEROP()
+		}
+
+		// Decode and validate UserOp callData contains correct payments
+		const calls = decodeExecuteBatch(userOp.callData)
+
+		// Find the batchTransferWithUserOp call to the relayer
+		const relayerCall = calls.find(
+			(call) => call.to.toLowerCase() === env.B402_RELAYER_ADDRESS.toLowerCase()
+		)
+
+		if (!relayerCall) {
+			throw new BaseErrors.ERR_INVALID_USEROP()
+		}
+
+		// Decode the batchTransferWithUserOp
+		const relayerIface = new ethers.Interface(B402_RELAYER_ABI)
+		const decoded = relayerIface.decodeFunctionData('batchTransferWithUserOp', relayerCall.data)
+
+		const token = decoded[0] as string
+		const recipients = decoded[1] as string[]
+		const amounts = decoded[2] as bigint[]
+
+		// Validate token is supported
+		const tokenConfig = Object.values(SUPPORTED_TOKENS).find(
+			(t) => t.address.toLowerCase() === token.toLowerCase()
+		)
+		if (!tokenConfig) {
+			throw new BaseErrors.ERR_UNSUPPORTED_TOKEN()
+		}
+
+		// Validate fee payment exists and is correct
+		const feeRecipientIndex = recipients.findIndex(
+			(r) => r.toLowerCase() === env.WALLET_FEE_RECIPIENT.toLowerCase()
+		)
+		if (feeRecipientIndex === -1) {
+			throw new BaseErrors.ERR_INVALID_FEE_RECIPIENT()
+		}
+
+		// Validate fee amount matches calculated total
+		const feeAmount = ethers.formatUnits(amounts[feeRecipientIndex], tokenConfig.decimals)
+		if (Number.parseFloat(feeAmount) !== Number.parseFloat(totalFees)) {
+			throw new BaseErrors.ERR_INCORRECT_DEPLOYMENT_FEE()
+		}
+
+		// If funding is requested, validate funding payments to each wallet
+		if (fundingRequested) {
+			for (const wallet of wallets) {
+				const fundingIndex = recipients.findIndex(
+					(r) => r.toLowerCase() === wallet.address.toLowerCase()
+				)
+				if (fundingIndex === -1) {
+					throw new BaseErrors.ERR_INVALID_RECIPIENT_ADDRESS()
+				}
+				// Store the funding amount from the UserOp for this wallet
+				wallet.fundingAmount = ethers.formatUnits(amounts[fundingIndex], tokenConfig.decimals)
+			}
+		}
+
+		// Validate payer wallet has sufficient balance
+		const totalPaymentAmount = amounts.reduce((sum, amt) => sum + amt, 0n)
+		const balanceStr = await getTokenBalance(payerWalletAddress, token)
+		const balance = BigInt(balanceStr)
+		if (balance < totalPaymentAmount) {
+			throw new BaseErrors.ERR_INSUFFICIENT_BALANCE()
+		}
+
+		// Return validation response
+		return {
+			isValid: true,
+			payer: payerWalletAddress,
+			wallets,
+			deploymentFee: totalDeploymentFee,
+			fundingFees: totalFundingFees,
+			totalFees
+		}
+	} catch (error) {
+		return handleAndReturnErrorResponse(reply, error)
+	}
+}
+
+/**
+ * Function for route `/deploy/wallet/settle`
+ * Execute smart wallet payment and deploy wallets
+ *
+ * @param request
+ * @param reply
+ * @returns
+ */
+export async function settleDeploymentByWallet(request: FastifyRequest, reply: FastifyReply) {
+	try {
+		const body = request.body as DeployWalletSettleRequest
+		const { userOp, signature, paymentRequirements, wallets } = body
+
+		// Extract payer wallet address from UserOp sender
+		const payerWalletAddress = userOp.sender
+
+		// Validate deployment config exists
+		if (!paymentRequirements.deployment) {
+			throw new BaseErrors.ERR_MISSING_DEPLOYMENT_PARAMS()
+		}
+
+		const { fundingRequested } = paymentRequirements.deployment
+
+		// Validate wallets array
+		if (!wallets || wallets.length === 0) {
+			throw new BaseErrors.ERR_INVALID_WALLET_COUNT()
+		}
+
+		if (wallets.length > 10) {
+			throw new BaseErrors.ERR_INVALID_WALLET_COUNT()
+		}
+
+		// Validate all wallet addresses and owners
+		for (const wallet of wallets) {
+			if (!ethers.isAddress(wallet.address)) {
+				throw new BaseErrors.ERR_INVALID_ADDRESS()
+			}
+			if (!ethers.isAddress(wallet.owner)) {
+				throw new BaseErrors.ERR_INVALID_ADDRESS()
+			}
+		}
+
+		// Calculate and validate fees
+		const count = wallets.length
+		const deploymentFeePerWallet = Number.parseFloat(env.WALLET_DEPLOYMENT_FEE)
+		const totalDeploymentFee = (count * deploymentFeePerWallet).toFixed(2)
+		const fundingFeePerWallet = Number.parseFloat(env.WALLET_PAYMENT_FEE)
+		const totalFundingFees = fundingRequested ? (count * fundingFeePerWallet).toFixed(2) : '0'
+		const totalFees = (
+			Number.parseFloat(totalDeploymentFee) + Number.parseFloat(totalFundingFees)
+		).toFixed(2)
+
+		// Validate UserOp contains correct payments before submission
+		if (!userOp.callData || userOp.callData === '0x') {
+			throw new BaseErrors.ERR_INVALID_USEROP()
+		}
+
+		// Decode and validate UserOp callData
+		const calls = decodeExecuteBatch(userOp.callData)
+		const relayerCall = calls.find(
+			(call) => call.to.toLowerCase() === env.B402_RELAYER_ADDRESS.toLowerCase()
+		)
+
+		if (!relayerCall) {
+			throw new BaseErrors.ERR_INVALID_USEROP()
+		}
+
+		// Decode the `batchTransferWithUserOp`
+		const relayerIface = new ethers.Interface(B402_RELAYER_ABI)
+		const decoded = relayerIface.decodeFunctionData('batchTransferWithUserOp', relayerCall.data)
+
+		const token = decoded[0] as string
+		const recipients = decoded[1] as string[]
+		const amounts = decoded[2] as bigint[]
+
+		// Validate token is supported
+		const tokenConfig = Object.values(SUPPORTED_TOKENS).find(
+			(t) => t.address.toLowerCase() === token.toLowerCase()
+		)
+		if (!tokenConfig) {
+			throw new BaseErrors.ERR_UNSUPPORTED_TOKEN()
+		}
+
+		// Validate fee payment exists and is correct
+		const feeRecipientIndex = recipients.findIndex(
+			(r) => r.toLowerCase() === env.WALLET_FEE_RECIPIENT.toLowerCase()
+		)
+		if (feeRecipientIndex === -1) {
+			throw new BaseErrors.ERR_INVALID_FEE_RECIPIENT()
+		}
+
+		const feeAmount = ethers.formatUnits(amounts[feeRecipientIndex], tokenConfig.decimals)
+		if (Number.parseFloat(feeAmount) !== Number.parseFloat(totalFees)) {
+			throw new BaseErrors.ERR_INCORRECT_DEPLOYMENT_FEE()
+		}
+
+		// If funding is requested, validate funding payments
+		if (fundingRequested) {
+			for (const wallet of wallets) {
+				const fundingIndex = recipients.findIndex(
+					(r) => r.toLowerCase() === wallet.address.toLowerCase()
+				)
+				if (fundingIndex === -1) {
+					throw new BaseErrors.ERR_INVALID_RECIPIENT_ADDRESS()
 				}
 			}
 		}
 
+		// Prevent paying for the same wallet multiple times
+		const walletAddressesToCheck = wallets.map((w) => w.address.toLowerCase())
+		const existingRecords = await WalletDeployment.find({
+			walletAddress: { $in: walletAddressesToCheck }
+		})
+
+		if (existingRecords.length > 0) {
+			throw new BaseErrors.ERR_WALLET_ALREADY_PAID()
+		}
+
+		// Submit UserOp to bundler
+		userOp.signature = signature
+		let userOpHash: string
+		try {
+			userOpHash = await submitUserOpToBundler(userOp)
+		} catch (error) {
+			throw new BaseErrors.ERR_BUNDLER_SUBMISSION_FAILED()
+		}
+
+		// Wait for receipt
+		let paymentTxHash = ''
+		let paymentSuccess = false
+		try {
+			for (let i = 0; i < 30; i++) {
+				await new Promise((resolve) => setTimeout(resolve, 2000))
+				try {
+					const receipt = await getUserOpReceipt(userOpHash)
+					if (receipt.success) {
+						paymentTxHash = receipt.txHash
+						paymentSuccess = true
+						break
+					}
+				} catch {
+					// Continue polling
+				}
+			}
+		} catch (error) {
+			console.log('Error waiting for receipt:', error)
+		}
+
+		if (!paymentSuccess || !paymentTxHash) {
+			throw new BaseErrors.ERR_TRANSACTION_CONFIRMATION_FAILED()
+		}
+
+		// Create DB entries for wallets after successful payment
+		// Note: Since UserOp executed successfully, all payments (fees + funding) completed atomically
+		await WalletDeployment.insertMany(
+			wallets.map((wallet) => ({
+				ownerAddress: wallet.owner.toLowerCase(),
+				walletAddress: wallet.address.toLowerCase(),
+				salt: wallet.salt,
+				payerAddress: payerWalletAddress.toLowerCase(),
+				paymentTxHash: paymentTxHash.toLowerCase(),
+				paymentCompleted: true,
+				deploymentCompleted: false,
+				fundingAmount: wallet.fundingAmount,
+				fundingRequested: !!wallet.fundingAmount,
+				fundingCompleted: false // Will be set to true after deployment if funding was requested
+			}))
+		)
+
+		// Get provider and signer
+		const providerService = getProviderService()
+		const provider = providerService.getProvider()
+		const relayerWallet = new Wallet(request.server.config.RELAYER_PRIVATE_KEY)
+		const signer = relayerWallet.connect(provider)
+
+		// Deploy wallets and track results
+		const createAccountABI = [
+			'function createAccount(address owner, uint256 salt) returns (address)'
+		]
+		const factoryWithSigner = new Contract(
+			env.SIMPLE_ACCOUNT_FACTORY_ADDRESS,
+			createAccountABI,
+			signer
+		)
+
+		const deployedWallets: Array<{
+			address: string
+			salt: string
+			owner: string
+			deploymentTxHash: string
+			fundingAmount?: string
+			fundingCompleted?: boolean
+		}> = []
+		const failedWallets: Array<{ address: string; salt: string; owner: string }> = []
+
+		for (let i = 0; i < wallets.length; i++) {
+			const wallet = wallets[i]
+			try {
+				const deploymentTx = await factoryWithSigner.createAccount(
+					wallet.owner,
+					ethers.toBigInt(wallet.salt),
+					{
+						gasLimit: 500000
+					}
+				)
+				const receipt = await deploymentTx.wait()
+				const deploymentTxHash = receipt?.hash || deploymentTx.hash
+
+				deployedWallets.push({
+					address: wallet.address,
+					salt: wallet.salt,
+					owner: wallet.owner,
+					deploymentTxHash,
+					fundingAmount: wallet.fundingAmount,
+					fundingCompleted: !!wallet.fundingAmount // Funding already happened atomically via UserOp
+				})
+			} catch (error) {
+				failedWallets.push({
+					address: wallet.address,
+					salt: wallet.salt,
+					owner: wallet.owner
+				})
+				// Continue to next wallet, don't throw - support partial successes
+				// Note: Failed wallet deployments can be retried via the `/claim` route
+				// Note: If funding succeeded, the tokens will be accessible once the wallet is successfully deployed
+			}
+		}
+
+		// Batch update deployment status for all successful wallets
+		if (deployedWallets.length > 0) {
+			const bulkOps = deployedWallets.map((wallet) => ({
+				updateOne: {
+					filter: { walletAddress: wallet.address.toLowerCase() },
+					update: {
+						$set: {
+							deploymentTxHash: wallet.deploymentTxHash.toLowerCase(),
+							deploymentCompleted: true,
+							fundingCompleted: !!wallet.fundingAmount // Funding already happened atomically via UserOp
+						}
+					}
+				}
+			}))
+			await WalletDeployment.bulkWrite(bulkOps)
+		}
+
+		// Determine overall success flags
+		const deploymentSuccess = deployedWallets.length === wallets.length
+		const fundingSuccess = true // If UserOp succeeded, all funding transfers succeeded atomically
+
 		const response: DeployWalletsResponse = {
-			paymentSuccess: true,
-			deploymentSuccess: failedWallets.length === 0,
-			fundingSuccess: failedFundings.length === 0,
-			wallets: successfulWallets,
-			failedWallets: failedWallets.length > 0 ? failedWallets : undefined,
-			failedFundings: failedFundings.length > 0 ? failedFundings : undefined,
+			paymentSuccess,
+			deploymentSuccess,
+			fundingSuccess,
+			wallets: deployedWallets,
+			failedWallets,
+			failedFundings: [], // No failures
 			paymentTxHash,
 			deploymentFee: totalDeploymentFee
 		}
@@ -923,6 +1433,8 @@ export async function getWalletsByOwner(request: FastifyRequest, reply: FastifyR
 			ownerAddress: owner.toLowerCase()
 		}).sort({ createdAt: -1 }) // Most recent first
 
+		// TODO: Consider caching this
+
 		const wallets = deployments.map((d) => ({
 			ownerAddress: d.ownerAddress,
 			walletAddress: d.walletAddress,
@@ -944,8 +1456,7 @@ export async function getWalletsByOwner(request: FastifyRequest, reply: FastifyR
 
 /**
  * Function for route `/wallet/claim`
- * Claim and retry deployment for wallets where payment was completed but deployment failed
- * TODO
+ * Claim and retry deployment/funding for wallets where payment was completed but deployment or funding failed
  *
  * @param request
  * @param reply
@@ -971,7 +1482,7 @@ export async function claimWalletDeployment(request: FastifyRequest, reply: Fast
 			throw new BaseErrors.ERR_INVALID_ADDRESS()
 		}
 
-		// Build query based on provided parameters
+		// Find all wallet deployments matching the criteria
 		interface QueryFilter {
 			paymentCompleted: boolean
 			deploymentCompleted: boolean
@@ -992,7 +1503,6 @@ export async function claimWalletDeployment(request: FastifyRequest, reply: Fast
 			query.payerAddress = payerAddress.toLowerCase()
 		}
 
-		// Find all wallet deployments matching the criteria
 		const deployments = await WalletDeployment.find(query)
 
 		if (deployments.length === 0) {
@@ -1007,39 +1517,69 @@ export async function claimWalletDeployment(request: FastifyRequest, reply: Fast
 		const relayerWallet = new Wallet(request.server.config.RELAYER_PRIVATE_KEY)
 		const signer = relayerWallet.connect(provider)
 
-		// Deploy wallets
+		// Deploy all pending wallets
 		const createAccountABI = [
 			'function createAccount(address owner, uint256 salt) returns (address)'
 		]
 		const factory = new Contract(env.SIMPLE_ACCOUNT_FACTORY_ADDRESS, createAccountABI, signer)
 
-		let deploymentTxHash = ''
-		try {
-			// Deploy all pending wallets
-			for (const deployment of deployments) {
+		const successfulDeployments: Array<{
+			address: string
+			salt: string
+			owner: string
+			deploymentTxHash: string
+		}> = []
+		const failedDeployments: Array<{
+			address: string
+			salt: string
+			owner: string
+			error: string
+		}> = []
+
+		for (const deployment of deployments) {
+			try {
 				const deploymentTx = await factory.createAccount(
 					deployment.ownerAddress,
 					ethers.toBigInt(deployment.salt),
 					{
-						gasLimit: 100000
+						gasLimit: 500000
 					}
 				)
 				const receipt = await deploymentTx.wait()
-				deploymentTxHash = receipt?.hash || deploymentTx.hash
+				const deploymentTxHash = receipt?.hash || deploymentTx.hash
+
+				successfulDeployments.push({
+					address: deployment.walletAddress,
+					salt: deployment.salt,
+					owner: deployment.ownerAddress,
+					deploymentTxHash
+				})
 
 				// Update this deployment record
 				await deployment.updateOne({
 					deploymentTxHash: deploymentTxHash.toLowerCase(),
-					deploymentCompleted: true
+					deploymentCompleted: true,
+					// For smart wallet payments, funding already succeeded atomically
+					// If no `fundingPaymentData` stored, this was a smart wallet payment
+					...(deployment.fundingRequested &&
+						!deployment.fundingPaymentData && {
+							fundingCompleted: true
+						})
 				})
+			} catch (error) {
+				failedDeployments.push({
+					address: deployment.walletAddress,
+					salt: deployment.salt,
+					owner: deployment.ownerAddress,
+					error: error instanceof Error ? error.message : 'Unknown error'
+				})
+				// Continue to next wallet - support partial success
 			}
-		} catch (error) {
-			throw new BaseErrors.ERR_WALLET_DEPLOYMENT_FAILED()
 		}
 
-		// After successful deployments, check for pending fundings
+		// After successful deployments, handle pending fundings (EOA only)
 		// Query for wallets that are deployed but have pending fundings
-		const fundingQuery = {
+		const fundingQuery: QueryFilter & { fundingRequested: boolean; fundingCompleted: boolean } = {
 			paymentCompleted: true,
 			deploymentCompleted: true,
 			fundingRequested: true,
@@ -1050,51 +1590,111 @@ export async function claimWalletDeployment(request: FastifyRequest, reply: Fast
 
 		const pendingFundings = await WalletDeployment.find(fundingQuery)
 
-		// Execute funding payments for each wallet
-		const fundedWallets: Array<{ address: string; fundingTxHash: string }> = []
-		const failedFundings: Array<{ address: string; reason: string }> = []
+		const successfulFundings: Array<{
+			address: string
+			fundingTxHash: string
+			fundingAmount: string
+		}> = []
+		const failedFundings: Array<{ address: string; reason: string; fundingAmount?: string }> = []
 
+		const relayerContract = new Contract(
+			request.server.config.B402_RELAYER_ADDRESS,
+			B402_RELAYER_ABI,
+			signer
+		)
+
+		// Retry funding transfer using stored payment data (deployments via EOA only)
+		// Note: Deployments via smart contract would have been funded already since it was atomic
 		for (const funding of pendingFundings) {
 			try {
-				// TODO: For EIP-712 signatures, create a solution that combines claims for wallet depl
-				// and on the main verify + settle flow
-				console.warn(
-					`Cannot retry funding for wallet ${funding.walletAddress} - payment signature not stored`
+				if (!funding.fundingPaymentData) {
+					await funding.updateOne({ fundingCompleted: true })
+					successfulFundings.push({
+						address: funding.walletAddress,
+						fundingTxHash: '', // Happened in UserOp
+						fundingAmount: funding.fundingAmount || '0'
+					})
+					continue
+				}
+
+				const { token, authorization, signature } = funding.fundingPaymentData
+
+				const fundingTx = await relayerContract.transferWithAuthorization(
+					token,
+					authorization.from,
+					authorization.to,
+					authorization.value,
+					authorization.validAfter,
+					authorization.validBefore,
+					authorization.nonce,
+					signature,
+					{
+						gasLimit: 200000
+					}
 				)
-				failedFundings.push({
+
+				const fundingReceipt = await fundingTx.wait()
+				const fundingTxHash = fundingReceipt?.hash || fundingTx.hash
+
+				successfulFundings.push({
 					address: funding.walletAddress,
-					reason: 'Payment signature not available for retry'
+					fundingTxHash,
+					fundingAmount: authorization.value
+				})
+
+				await funding.updateOne({
+					fundingTxHash: fundingTxHash.toLowerCase(),
+					fundingCompleted: true
 				})
 			} catch (error) {
 				failedFundings.push({
 					address: funding.walletAddress,
-					reason: 'Funding execution failed'
+					fundingAmount: funding.fundingAmount,
+					reason: error instanceof Error ? error.message : 'Funding execution failed'
 				})
 			}
 		}
 
-		// Prepare response
-		const wallets = deployments.map((d) => ({
-			address: d.walletAddress,
-			salt: d.salt,
-			owner: d.ownerAddress
-		}))
-
 		const network = providerService.getNetwork()
 		const response = {
-			success: true,
-			wallets,
-			deploymentTxHash,
-			network,
-			...(pendingFundings.length > 0
-				? {
-						fundingAttempted: true,
-						fundedWallets,
-						failedFundings
-					}
-				: {})
+			success: successfulDeployments.length > 0,
+			deployments: {
+				successful: successfulDeployments,
+				failed: failedDeployments
+			},
+			funding: {
+				successful: successfulFundings,
+				failed: failedFundings
+			},
+			network
 		}
 
+		return response
+	} catch (error) {
+		return handleAndReturnErrorResponse(reply, error)
+	}
+}
+
+/**
+ * Function for route `/health`
+ * Health check endpoint returning service status and relayer info
+ *
+ * @param request
+ * @param reply
+ * @returns
+ */
+export async function health(request: FastifyRequest, reply: FastifyReply) {
+	try {
+		const relayerWallet = new Wallet(request.server.config.RELAYER_PRIVATE_KEY)
+		const providerService = getProviderService()
+		const network = providerService.getNetwork()
+
+		const response: HealthResponse = {
+			status: 'healthy',
+			service: 'b402-facilitator',
+			network,
+			relayer: relayerWallet.address
+		}
 		return response
 	} catch (error) {
 		return handleAndReturnErrorResponse(reply, error)

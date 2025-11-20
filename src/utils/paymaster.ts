@@ -1,12 +1,12 @@
 import { ethers } from 'ethers'
 
+import type { UserOperation } from '../schema/b402'
 import { env } from '../schema/env'
 import { BaseErrors } from '../schema/errors'
-import type { UserOperationParams } from '../types/wallet'
 import { validateFeeIncluded } from './userOp'
 
 function getVerifyingPaymasterHash(
-	userOp: UserOperationParams,
+	userOp: UserOperation,
 	validUntil: number,
 	validAfter: number,
 	chainId: number
@@ -78,7 +78,7 @@ function getPaymasterSigner(): ethers.Wallet {
 	return paymasterSignerInstance
 }
 
-export function validateBeforeSigning(userOp: UserOperationParams): {
+export function validateBeforeSigning(userOp: UserOperation): {
 	valid: boolean
 	reason?: string
 } {
@@ -99,7 +99,7 @@ export function validateBeforeSigning(userOp: UserOperationParams): {
 }
 
 export async function signUserOp(
-	userOp: UserOperationParams,
+	userOp: UserOperation,
 	chainId: number
 ): Promise<{
 	paymaster: string
@@ -147,7 +147,7 @@ export function getPaymasterSignerAddress(): string {
 }
 
 export async function getUserOpHash(
-	userOp: UserOperationParams,
+	userOp: UserOperation,
 	entryPointAddress: string,
 	chainId: number
 ): Promise<string> {
@@ -212,7 +212,7 @@ export async function getUserOpHash(
 }
 
 export async function verifyPaymasterSignature(
-	userOp: UserOperationParams,
+	userOp: UserOperation,
 	chainId: number,
 	signature: string
 ): Promise<boolean> {
