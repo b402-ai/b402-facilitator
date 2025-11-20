@@ -3,8 +3,8 @@ import { Contract, ethers } from 'ethers'
 
 // ------------ Config (edit this) ------------
 const API_URL = 'http://localhost:3402'
-const PAYER_PRIVATE_KEY = 'c8009d84c2bfb226ce8badb1f8622d33e5a30e0a4f76ab64b1846c49e98f7782' // EOA private key
-const PAYER_SMART_WALLET_ADDRESS = '0xA2e47C5C30e695EfF8ACe49E856920B1C5A7dfEe' // Leave empty for EOA flow, for smart wallet flow must be owned by wallet of `PAYER_PRIVATE_KEY`
+const PAYER_PRIVATE_KEY = '' // EOA private key - set this in your environment
+const PAYER_SMART_WALLET_ADDRESS = '' // Leave empty for EOA flow, for smart wallet flow must be owned by wallet of `PAYER_PRIVATE_KEY`
 const NUM_WALLETS = 3 // 1-10
 const FUNDING_AMOUNT_PER_WALLET = '0.01' // in tokens, or '' for no funding
 const FEE_TOKEN_ADDRESS = '0x55d398326f99059fF775485246999027B3197955' // USDT - token used to pay deployment fees
@@ -37,15 +37,6 @@ const ERC20_ABI = [
 
 const FACTORY_ABI = ['function getAddress(address owner, uint256 salt) view returns (address)']
 
-const SIMPLE_ACCOUNT_ABI = [
-	'function executeBatch(address[] calldata dest, uint256[] calldata value, bytes[] calldata func)',
-	'function getNonce() view returns (uint256)'
-]
-
-const B402_RELAYER_ABI = [
-	'function batchTransferWithUserOp(address token, address[] recipients, uint256[] amounts, uint256 validAfter, uint256 validBefore, bytes32 nonce) external'
-]
-
 interface PaymentPayload {
 	token: string
 	payload: {
@@ -65,163 +56,6 @@ async function checkIfSmartWallet(address: string, rpcUrl: string): Promise<bool
 	const provider = new ethers.JsonRpcProvider(rpcUrl)
 	const code = await provider.getCode(address)
 	return code !== '0x' && code !== '0x0'
-}
-
-async function getUserOpHash(
-	userOp: Record<string, unknown>,
-	entryPointAddress: string,
-	chainId: number
-): Promise<string> {
-	const abiCoder = ethers.AbiCoder.defaultAbiCoder()
-
-	const factory = userOp.factory as string | undefined
-	const factoryData = userOp.factoryData as string | undefined
-	const initCode = factory && factoryData ? ethers.concat([factory, factoryData]) : '0x'
-
-	const accountGasLimits = ethers.solidityPacked(
-		['uint128', 'uint128'],
-		[BigInt(userOp.verificationGasLimit as string), BigInt(userOp.callGasLimit as string)]
-	)
-
-	const gasFees = ethers.solidityPacked(
-		['uint128', 'uint128'],
-		[BigInt(userOp.maxPriorityFeePerGas as string), BigInt(userOp.maxFeePerGas as string)]
-	)
-
-	let paymasterAndData = '0x'
-	if (userOp.paymaster) {
-		const paymasterVerificationGasLimit = (userOp.paymasterVerificationGasLimit as string) || '0x'
-		const paymasterPostOpGasLimit = (userOp.paymasterPostOpGasLimit as string) || '0x'
-		const paymasterData = (userOp.paymasterData as string) || '0x'
-
-		const verificationGasLimitPacked = ethers.zeroPadValue(
-			ethers.toBeHex(paymasterVerificationGasLimit),
-			16
-		)
-		const postOpGasLimitPacked = ethers.zeroPadValue(ethers.toBeHex(paymasterPostOpGasLimit), 16)
-
-		paymasterAndData = ethers.concat([
-			userOp.paymaster as string,
-			verificationGasLimitPacked,
-			postOpGasLimitPacked,
-			paymasterData
-		])
-	}
-
-	const packedUserOp = abiCoder.encode(
-		['address', 'uint256', 'bytes32', 'bytes32', 'bytes32', 'uint256', 'bytes32', 'bytes32'],
-		[
-			userOp.sender,
-			userOp.nonce,
-			ethers.keccak256(initCode),
-			ethers.keccak256(userOp.callData as string),
-			accountGasLimits,
-			userOp.preVerificationGas,
-			gasFees,
-			ethers.keccak256(paymasterAndData)
-		]
-	)
-
-	const userOpHash = ethers.keccak256(packedUserOp)
-
-	return ethers.keccak256(
-		abiCoder.encode(['bytes32', 'address', 'uint256'], [userOpHash, entryPointAddress, chainId])
-	)
-}
-
-async function createDeploymentUserOp(params: {
-	walletAddress: string
-	feeRecipient: string
-	totalFees: string
-	feeToken: string
-	feeTokenDecimals: number
-	fundingWallets?: Array<{ address: string; fundingAmount: string }>
-	fundingToken?: string
-	fundingTokenDecimals?: number
-	relayerAddress: string
-	rpcUrl: string
-}): Promise<Record<string, unknown>> {
-	const {
-		walletAddress,
-		feeRecipient,
-		totalFees,
-		feeToken,
-		feeTokenDecimals,
-		fundingWallets,
-		fundingToken,
-		fundingTokenDecimals,
-		relayerAddress,
-		rpcUrl
-	} = params
-
-	const provider = new ethers.JsonRpcProvider(rpcUrl)
-
-	// Build recipients and amounts arrays
-	const recipients: string[] = [feeRecipient]
-	const amounts: bigint[] = [ethers.parseUnits(totalFees, feeTokenDecimals)]
-
-	// Add funding transfers if requested
-	if (fundingWallets && fundingWallets.length > 0 && fundingToken && fundingTokenDecimals) {
-		for (const w of fundingWallets) {
-			recipients.push(w.address)
-			amounts.push(ethers.parseUnits(w.fundingAmount, fundingTokenDecimals))
-		}
-	}
-
-	// Generate nonce for relayer call
-	const validAfter = Math.floor(Date.now() / 1000) - 3600
-	const validBefore = Math.floor(Date.now() / 1000) + 3600
-	const nonce = ethers.hexlify(ethers.randomBytes(32))
-
-	// Encode batchTransferWithUserOp call
-	const relayerIface = new ethers.Interface(B402_RELAYER_ABI)
-	const batchTransferData = relayerIface.encodeFunctionData('batchTransferWithUserOp', [
-		feeToken,
-		recipients,
-		amounts,
-		validAfter,
-		validBefore,
-		nonce
-	])
-
-	// Encode executeBatch call
-	const accountIface = new ethers.Interface(SIMPLE_ACCOUNT_ABI)
-	const callData = accountIface.encodeFunctionData('executeBatch', [
-		[relayerAddress],
-		['0'],
-		[batchTransferData]
-	])
-
-	// Get wallet nonce
-	const walletContract = new Contract(walletAddress, SIMPLE_ACCOUNT_ABI, provider)
-	const walletNonce = await walletContract.getNonce()
-
-	// Get gas prices
-	const feeData = await provider.getFeeData()
-	const baseGasPrice = feeData.gasPrice || ethers.parseUnits('1', 'gwei')
-	const maxFeePerGas = (baseGasPrice * 12n) / 10n
-	const maxPriorityFeePerGas = ethers.parseUnits('1', 'gwei')
-
-	// Create UserOp
-	const userOp = {
-		sender: walletAddress,
-		nonce: ethers.toBeHex(walletNonce),
-		factory: undefined,
-		factoryData: undefined,
-		callData,
-		callGasLimit: ethers.toBeHex(1000000),
-		verificationGasLimit: ethers.toBeHex(1000000),
-		preVerificationGas: ethers.toBeHex(150000),
-		maxFeePerGas: ethers.toBeHex(maxFeePerGas),
-		maxPriorityFeePerGas: ethers.toBeHex(maxPriorityFeePerGas),
-		paymaster: undefined,
-		paymasterVerificationGasLimit: undefined,
-		paymasterPostOpGasLimit: undefined,
-		paymasterData: undefined,
-		signature: '0x'
-	}
-
-	return userOp
 }
 
 async function computeWalletAddress(
@@ -553,10 +387,6 @@ async function testSmartWalletPayment() {
 	}
 
 	// Calculate fees
-	const provider = new ethers.JsonRpcProvider(rpcUrl)
-	const feeToken = new Contract(FEE_TOKEN_ADDRESS, ERC20_ABI, provider)
-	const feeTokenDecimals = await feeToken.decimals()
-
 	const deploymentFeePerWallet = 0.01
 	const fundingFeePerWallet = 0.01
 	const totalDeploymentFee = NUM_WALLETS * deploymentFeePerWallet
@@ -567,38 +397,12 @@ async function testSmartWalletPayment() {
 	console.log(`Funding fees: ${totalFundingFees} tokens`)
 	console.log(`Total fees: ${totalFees} tokens`)
 
-	// Create UserOp for payment
-	const fundingWallets = FUNDING_AMOUNT_PER_WALLET
-		? wallets.map((w) => ({ address: w.address, fundingAmount: FUNDING_AMOUNT_PER_WALLET }))
-		: undefined
-
-	const fundingToken = FUNDING_AMOUNT_PER_WALLET ? FUNDING_TOKEN_ADDRESS : undefined
-	let fundingTokenDecimals: number | undefined
-	if (fundingToken) {
-		const token = new Contract(fundingToken, ERC20_ABI, provider)
-		fundingTokenDecimals = await token.decimals()
-	}
-
-	const userOp = await createDeploymentUserOp({
-		walletAddress: payerWalletAddress,
-		feeRecipient,
-		totalFees: totalFees.toString(),
-		feeToken: FEE_TOKEN_ADDRESS,
-		feeTokenDecimals,
-		fundingWallets,
-		fundingToken,
-		fundingTokenDecimals,
-		relayerAddress,
-		rpcUrl
-	})
-
-	// Step 1: Verify
+	// Step 1: Verify (backend creates UserOp)
 	const verifyPayload = {
-		userOp,
 		paymentRequirements: {
 			network: NETWORK,
-			relayerContract: relayerAddress,
 			deployment: {
+				payerAddress: payerWalletAddress,
 				ownerAddress,
 				salts: wallets.map((w) => w.salt),
 				fundingRequested: !!FUNDING_AMOUNT_PER_WALLET
@@ -615,11 +419,11 @@ async function testSmartWalletPayment() {
 		return
 	}
 
-	// Use the UserOp returned from verify (now includes paymaster signature)
+	// Use the UserOp and userOpHash returned from verify
 	const verifiedUserOp = (verifyResponse as { userOp: Record<string, unknown> }).userOp
+	const userOpHash = (verifyResponse as { userOpHash: string }).userOpHash
 
 	console.log('Step 2: Signing UserOp...')
-	const userOpHash = await getUserOpHash(verifiedUserOp, entryPointAddress, CHAIN_ID)
 	const signature = await ownerWallet.signMessage(ethers.getBytes(userOpHash))
 
 	console.log('Step 3: Settling deployment...')

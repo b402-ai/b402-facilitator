@@ -41,6 +41,7 @@ export const PaymentRequirementsSchema = {
 		deployment: {
 			type: 'object',
 			properties: {
+				payerAddress: { type: 'string' },
 				ownerAddress: { type: 'string' },
 				salts: {
 					type: 'array',
@@ -54,7 +55,7 @@ export const PaymentRequirementsSchema = {
 			additionalProperties: false
 		}
 	},
-	required: ['network', 'relayerContract'],
+	required: ['network'],
 	additionalProperties: false
 } as const
 
@@ -140,10 +141,9 @@ export const DeployEOAVerifyRequestSchema = {
 export const DeployWalletVerifyRequestSchema = {
 	type: 'object',
 	properties: {
-		userOp: { type: 'object' }, // UserOperation - not fully validated here
 		paymentRequirements: PaymentRequirementsSchema
 	},
-	required: ['userOp', 'paymentRequirements'],
+	required: ['paymentRequirements'],
 	additionalProperties: false
 } as const
 
@@ -171,6 +171,7 @@ export const DeployWalletsVerifyResponseSchema = {
 		fundingFees: { type: 'string' },
 		totalFees: { type: 'string' },
 		userOp: { type: 'object', additionalProperties: true },
+		userOpHash: { type: 'string' },
 		invalidReason: { type: 'string' }
 	},
 	required: ['isValid', 'wallets', 'deploymentFee'],
@@ -640,9 +641,10 @@ export interface PaymentPayload {
 
 export interface PaymentRequirements {
 	network: string
-	relayerContract: string
+	relayerContract?: string
 	// Only used in /wallet/deploy routes
 	deployment?: {
+		payerAddress: string
 		ownerAddress: string
 		salts: string[]
 		fundingRequested?: boolean
@@ -703,7 +705,6 @@ export interface DeployEOASettleRequest {
 
 // Smart wallet deployment interfaces
 export interface DeployWalletVerifyRequest {
-	userOp: UserOperation
 	paymentRequirements: PaymentRequirements
 }
 

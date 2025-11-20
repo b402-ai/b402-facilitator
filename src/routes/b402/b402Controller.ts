@@ -23,16 +23,23 @@ import type {
 } from '../../schema/b402'
 import { env } from '../../schema/env'
 import { BaseErrors, handleAndReturnErrorResponse } from '../../schema/errors'
+import type { BatchCall } from '../../types/wallet'
 import { getUserOpHash, signUserOp } from '../../utils/paymaster'
 import { getProviderService } from '../../utils/provider'
 import {
 	createPaymentUserOpOrThrow,
 	decodeExecuteBatch,
+	encodeExecuteBatch,
 	getUserOpReceipt,
 	submitUserOpToBundler,
 	validateFeeIncluded
 } from '../../utils/userOp'
-import { getTokenBalance, isWalletDeployed } from '../../utils/wallet'
+import {
+	getTokenAllowance,
+	getTokenBalance,
+	getWalletNonce,
+	isWalletDeployed
+} from '../../utils/wallet'
 
 /**
  * Function for route `/verify`
@@ -985,17 +992,15 @@ export async function settleDeploymentByEOA(request: FastifyRequest, reply: Fast
 export async function verifyDeploymentByWallet(request: FastifyRequest, reply: FastifyReply) {
 	try {
 		const body = request.body as DeployWalletVerifyRequest
-		const { userOp, paymentRequirements } = body
-
-		// Extract payer wallet address from UserOp sender
-		const payerWalletAddress = userOp.sender.toLowerCase()
+		const { paymentRequirements } = body
 
 		// Validate deployment config exists
 		if (!paymentRequirements.deployment) {
 			throw new BaseErrors.ERR_MISSING_DEPLOYMENT_PARAMS()
 		}
 
-		const { ownerAddress, salts, fundingRequested } = paymentRequirements.deployment
+		const { payerAddress, ownerAddress, salts, fundingRequested } = paymentRequirements.deployment
+		const payerWalletAddress = payerAddress.toLowerCase()
 
 		// Validate owner address
 		if (!ethers.isAddress(ownerAddress)) {
@@ -1035,6 +1040,11 @@ export async function verifyDeploymentByWallet(request: FastifyRequest, reply: F
 		const wallets: Array<{ address: string; salt: string; owner: string; fundingAmount?: string }> =
 			[]
 
+		// Determine which token to use - default to first supported token (USDT)
+		const token = Object.values(SUPPORTED_TOKENS)[0].address
+		const tokenConfig = Object.values(SUPPORTED_TOKENS)[0]
+
+		const fundingAmounts: string[] = []
 		for (let i = 0; i < count; i++) {
 			const saltStr = salts[i]
 
@@ -1055,76 +1065,100 @@ export async function verifyDeploymentByWallet(request: FastifyRequest, reply: F
 				throw new BaseErrors.ERR_WALLET_ALREADY_PAID()
 			}
 
-			wallets.push({
+			const wallet: { address: string; salt: string; owner: string; fundingAmount?: string } = {
 				address: computedWalletAddress,
 				salt: saltStr,
 				owner: ownerAddress
-			})
+			}
+
+			if (fundingRequested) {
+				const fundingAmount = env.WALLET_PAYMENT_FEE
+				wallet.fundingAmount = fundingAmount
+				fundingAmounts.push(fundingAmount)
+			}
+
+			wallets.push(wallet)
 		}
 
-		// Validate UserOp contains correct multicall structure
-		if (!userOp.callData || userOp.callData === '0x') {
-			throw new BaseErrors.ERR_INVALID_USEROP()
-		}
+		// Build UserOp for deployment payment
+		// Calculate recipients and amounts
+		const recipients: string[] = [env.WALLET_FEE_RECIPIENT]
+		const paymentAmounts: bigint[] = [ethers.parseUnits(totalFees, tokenConfig.decimals)]
 
-		// Decode and validate UserOp callData contains correct payments
-		const calls = decodeExecuteBatch(userOp.callData)
-
-		// Find the batchTransferWithUserOp call to the relayer
-		const relayerCall = calls.find(
-			(call) => call.to.toLowerCase() === env.B402_RELAYER_ADDRESS.toLowerCase()
-		)
-
-		if (!relayerCall) {
-			throw new BaseErrors.ERR_INVALID_USEROP()
-		}
-
-		// Decode the batchTransferWithUserOp
-		const relayerIface = new ethers.Interface(B402_RELAYER_ABI)
-		const decoded = relayerIface.decodeFunctionData('batchTransferWithUserOp', relayerCall.data)
-
-		const token = decoded[0] as string
-		const recipients = decoded[1] as string[]
-		const amounts = decoded[2] as bigint[]
-
-		// Validate token is supported
-		const tokenConfig = Object.values(SUPPORTED_TOKENS).find(
-			(t) => t.address.toLowerCase() === token.toLowerCase()
-		)
-		if (!tokenConfig) {
-			throw new BaseErrors.ERR_UNSUPPORTED_TOKEN()
-		}
-
-		// Validate fee payment exists and is correct
-		const feeRecipientIndex = recipients.findIndex(
-			(r) => r.toLowerCase() === env.WALLET_FEE_RECIPIENT.toLowerCase()
-		)
-		if (feeRecipientIndex === -1) {
-			throw new BaseErrors.ERR_INVALID_FEE_RECIPIENT()
-		}
-
-		// Validate fee amount matches calculated total
-		const feeAmount = ethers.formatUnits(amounts[feeRecipientIndex], tokenConfig.decimals)
-		if (Number.parseFloat(feeAmount) !== Number.parseFloat(totalFees)) {
-			throw new BaseErrors.ERR_INCORRECT_DEPLOYMENT_FEE()
-		}
-
-		// If funding is requested, validate funding payments to each wallet
-		if (fundingRequested) {
-			for (const wallet of wallets) {
-				const fundingIndex = recipients.findIndex(
-					(r) => r.toLowerCase() === wallet.address.toLowerCase()
-				)
-				if (fundingIndex === -1) {
-					throw new BaseErrors.ERR_INVALID_RECIPIENT_ADDRESS()
-				}
-				// Store the funding amount from the UserOp for this wallet
-				wallet.fundingAmount = ethers.formatUnits(amounts[fundingIndex], tokenConfig.decimals)
+		// Add funding recipients if requested
+		if (fundingRequested && fundingAmounts.length > 0) {
+			for (let i = 0; i < wallets.length; i++) {
+				recipients.push(wallets[i].address)
+				paymentAmounts.push(ethers.parseUnits(fundingAmounts[i], tokenConfig.decimals))
 			}
 		}
 
+		const totalPaymentAmount = paymentAmounts.reduce((sum, amt) => sum + amt, 0n)
+
+		// Check if we need to approve relayer
+		const currentAllowance = await getTokenAllowance(payerWalletAddress, token)
+		const needsApproval = BigInt(currentAllowance) < totalPaymentAmount
+
+		// Build batch calls
+		const calls: BatchCall[] = []
+
+		if (needsApproval) {
+			const approveData = new ethers.Interface([
+				'function approve(address spender, uint256 amount) returns (bool)'
+			]).encodeFunctionData('approve', [env.B402_RELAYER_ADDRESS, totalPaymentAmount])
+			calls.push({
+				to: token,
+				value: '0',
+				data: approveData
+			})
+		}
+
+		const relayerIface = new ethers.Interface(B402_RELAYER_ABI)
+		const validAfter = Math.floor(Date.now() / 1000) - 3600
+		const validBefore = Math.floor(Date.now() / 1000) + 3600
+		const nonce = ethers.hexlify(ethers.randomBytes(32))
+
+		const batchTransferData = relayerIface.encodeFunctionData('batchTransferWithUserOp', [
+			token,
+			recipients,
+			paymentAmounts,
+			validAfter,
+			validBefore,
+			nonce
+		])
+		calls.push({
+			to: env.B402_RELAYER_ADDRESS,
+			value: '0',
+			data: batchTransferData
+		})
+
+		const callData = encodeExecuteBatch(calls)
+		const walletNonce = await getWalletNonce(payerWalletAddress)
+
+		const feeData = await provider.getFeeData()
+		const baseGasPrice = feeData.gasPrice || ethers.parseUnits('1', 'gwei')
+		const maxFeePerGas = (baseGasPrice * 12n) / 10n
+		const maxPriorityFeePerGas = ethers.parseUnits('1', 'gwei')
+
+		const userOp: UserOperation = {
+			sender: payerWalletAddress,
+			nonce: ethers.toBeHex(walletNonce),
+			factory: undefined,
+			factoryData: undefined,
+			callData,
+			callGasLimit: ethers.toBeHex(1000000),
+			verificationGasLimit: ethers.toBeHex(1000000),
+			preVerificationGas: ethers.toBeHex(150000),
+			maxFeePerGas: ethers.toBeHex(maxFeePerGas),
+			maxPriorityFeePerGas: ethers.toBeHex(maxPriorityFeePerGas),
+			paymaster: undefined,
+			paymasterVerificationGasLimit: undefined,
+			paymasterPostOpGasLimit: undefined,
+			paymasterData: undefined,
+			signature: '0x'
+		}
+
 		// Validate payer wallet has sufficient balance
-		const totalPaymentAmount = amounts.reduce((sum, amt) => sum + amt, 0n)
 		const balanceStr = await getTokenBalance(payerWalletAddress, token)
 		const balance = BigInt(balanceStr)
 		if (balance < totalPaymentAmount) {
@@ -1139,6 +1173,8 @@ export async function verifyDeploymentByWallet(request: FastifyRequest, reply: F
 		userOp.paymasterPostOpGasLimit = paymasterData.paymasterPostOpGasLimit
 		userOp.paymasterData = paymasterData.paymasterData
 
+		const userOpHash = await getUserOpHash(userOp, env.ENTRY_POINT_ADDRESS, chainId)
+
 		// Return validation response with paymaster-signed UserOp
 		return {
 			isValid: true,
@@ -1147,7 +1183,8 @@ export async function verifyDeploymentByWallet(request: FastifyRequest, reply: F
 			deploymentFee: totalDeploymentFee,
 			fundingFees: totalFundingFees,
 			totalFees,
-			userOp
+			userOp,
+			userOpHash
 		}
 	} catch (error) {
 		return handleAndReturnErrorResponse(reply, error)

@@ -24,7 +24,7 @@ function encodeApprove(spender: string, amount: bigint): string {
 	return iface.encodeFunctionData('approve', [spender, amount])
 }
 
-function encodeExecuteBatch(calls: BatchCall[]): string {
+export function encodeExecuteBatch(calls: BatchCall[]): string {
 	const iface = new ethers.Interface(SIMPLE_ACCOUNT_ABI)
 	const dests = calls.map((c) => c.to)
 	const values = calls.map((c) => c.value)
