@@ -1131,14 +1131,23 @@ export async function verifyDeploymentByWallet(request: FastifyRequest, reply: F
 			throw new BaseErrors.ERR_INSUFFICIENT_BALANCE()
 		}
 
-		// Return validation response
+		// Sign UserOp with paymaster to enable gasless transaction
+		const chainId = env.NETWORK === 'mainnet' ? 56 : 97
+		const paymasterData = await signUserOp(userOp, chainId)
+		userOp.paymaster = paymasterData.paymaster
+		userOp.paymasterVerificationGasLimit = paymasterData.paymasterVerificationGasLimit
+		userOp.paymasterPostOpGasLimit = paymasterData.paymasterPostOpGasLimit
+		userOp.paymasterData = paymasterData.paymasterData
+
+		// Return validation response with paymaster-signed UserOp
 		return {
 			isValid: true,
 			payer: payerWalletAddress,
 			wallets,
 			deploymentFee: totalDeploymentFee,
 			fundingFees: totalFundingFees,
-			totalFees
+			totalFees,
+			userOp
 		}
 	} catch (error) {
 		return handleAndReturnErrorResponse(reply, error)

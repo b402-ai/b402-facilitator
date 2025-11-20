@@ -170,10 +170,11 @@ export const DeployWalletsVerifyResponseSchema = {
 		deploymentFee: { type: 'string' },
 		fundingFees: { type: 'string' },
 		totalFees: { type: 'string' },
+		userOp: { type: 'object', additionalProperties: true },
 		invalidReason: { type: 'string' }
 	},
 	required: ['isValid', 'wallets', 'deploymentFee'],
-	additionalProperties: false
+	additionalProperties: true
 } as const
 
 // POST /deploy/settle - Request (EOA payment)

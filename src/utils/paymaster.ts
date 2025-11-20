@@ -1,9 +1,10 @@
 import { ethers } from 'ethers'
 
+import { B402_RELAYER_ABI } from '../constants'
 import type { UserOperation } from '../schema/b402'
 import { env } from '../schema/env'
 import { BaseErrors } from '../schema/errors'
-import { validateFeeIncluded } from './userOp'
+import { decodeExecuteBatch } from './userOp'
 
 function getVerifyingPaymasterHash(
 	userOp: UserOperation,
@@ -82,20 +83,49 @@ export function validateBeforeSigning(userOp: UserOperation): {
 	valid: boolean
 	reason?: string
 } {
-	// Skip fee validation for deployment operations
+	// Skip fee validation for deployment operations (initCode present)
 	if (userOp.callData === '0x') {
 		return { valid: true }
 	}
 
-	// Check if fee is included for payment operations
-	const hasFee = validateFeeIncluded(userOp)
-	if (!hasFee) {
+	// For wallet deployment and payment operations, validate that fee is included to WALLET_FEE_RECIPIENT
+	// We don't validate the exact amount here since deployment fees are variable (based on number of wallets)
+	// The controller validates the exact fee amount before calling this
+	try {
+		const calls = decodeExecuteBatch(userOp.callData)
+		const hasRelayerCall = calls.some((call) => {
+			if (call.to.toLowerCase() !== env.B402_RELAYER_ADDRESS.toLowerCase()) {
+				return false
+			}
+
+			try {
+				const iface = new ethers.Interface(B402_RELAYER_ABI)
+				const decoded = iface.decodeFunctionData('batchTransferWithUserOp', call.data)
+				const recipients = decoded[1] as string[]
+
+				// Check if fee recipient is included
+				const hasFeeRecipient = recipients.some(
+					(r) => r.toLowerCase() === env.WALLET_FEE_RECIPIENT.toLowerCase()
+				)
+				return hasFeeRecipient
+			} catch {
+				return false
+			}
+		})
+
+		if (!hasRelayerCall) {
+			return {
+				valid: false,
+				reason: `Fee transfer not found. Required: Payment to ${env.WALLET_FEE_RECIPIENT}`
+			}
+		}
+		return { valid: true }
+	} catch (error) {
 		return {
 			valid: false,
-			reason: `Fee transfer not found. Required: ${env.WALLET_PAYMENT_FEE} USDT to ${env.WALLET_FEE_RECIPIENT}`
+			reason: 'Failed to validate UserOp structure'
 		}
 	}
-	return { valid: true }
 }
 
 export async function signUserOp(
