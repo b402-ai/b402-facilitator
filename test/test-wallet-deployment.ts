@@ -3,7 +3,7 @@ import { Contract, ethers } from 'ethers'
 
 // ------------ Config (edit this) ------------
 const API_URL = 'http://localhost:3402'
-const PAYER_PRIVATE_KEY = '' // EOA private key - set this in your environment
+const PAYER_PRIVATE_KEY = '' // EOA payer private key (required for both, EOA and smart wallet payment flows)
 const PAYER_SMART_WALLET_ADDRESS = '' // Leave empty for EOA flow, for smart wallet flow must be owned by wallet of `PAYER_PRIVATE_KEY`
 const NUM_WALLETS = 3 // 1-10
 const FUNDING_AMOUNT_PER_WALLET = '0.01' // in tokens, or '' for no funding
