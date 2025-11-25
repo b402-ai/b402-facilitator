@@ -13,6 +13,8 @@ export interface IWalletDeployment {
 	fundingRequested: boolean
 	fundingCompleted: boolean
 	fundingTxHash?: string
+	feePaymentNonce?: string // For EOA: nonce from fee payment authorization
+	userOpNonce?: string // For Smart Wallet: nonce from UserOp
 	fundingPaymentData?: {
 		token: string
 		authorization: {
@@ -93,6 +95,16 @@ const WalletDeploymentSchema = new mongoose.Schema<IWalletDeployment>(
 			type: String,
 			trim: true,
 			lowercase: true
+		},
+		feePaymentNonce: {
+			type: String,
+			trim: true,
+			required: false
+		},
+		userOpNonce: {
+			type: String,
+			trim: true,
+			required: false
 		},
 		fundingPaymentData: {
 			type: mongoose.Schema.Types.Mixed,

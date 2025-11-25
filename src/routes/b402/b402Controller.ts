@@ -770,6 +770,7 @@ export async function settleDeploymentByEOA(request: FastifyRequest, reply: Fast
 						fundingAmount: wallet.fundingAmount,
 						fundingRequested: !!wallet.fundingAmount,
 						fundingCompleted: false,
+						feePaymentNonce: authorization.nonce, // Seeder matching
 						// Store funding payment data for retry in case funding fails
 						...(fundingPayment && {
 							fundingPaymentData: {
@@ -823,15 +824,19 @@ export async function settleDeploymentByEOA(request: FastifyRequest, reply: Fast
 		}
 
 		// Update DB entries with payment details after successful payment
-		await WalletDeployment.updateMany(
-			{ walletAddress: { $in: walletAddressesToCheck } },
-			{
-				$set: {
-					paymentTxHash: paymentTxHash.toLowerCase(),
-					paymentCompleted: true
+		try {
+			await WalletDeployment.updateMany(
+				{ walletAddress: { $in: walletAddressesToCheck } },
+				{
+					$set: {
+						paymentTxHash: paymentTxHash.toLowerCase(),
+						paymentCompleted: true
+					}
 				}
-			}
-		)
+			)
+		} catch {
+			// Seeder will update retroactively if DB fails here
+		}
 
 		// Deploy wallets and track results
 		const createAccountABI = [
@@ -897,7 +902,11 @@ export async function settleDeploymentByEOA(request: FastifyRequest, reply: Fast
 					}
 				}
 			}))
-			await WalletDeployment.bulkWrite(bulkOps)
+			try {
+				await WalletDeployment.bulkWrite(bulkOps)
+			} catch {
+				// Seeder will update retroactively if DB fails here
+			}
 		}
 
 		// Execute funding payments for successfully deployed wallets
@@ -977,7 +986,11 @@ export async function settleDeploymentByEOA(request: FastifyRequest, reply: Fast
 						}
 					}
 				}))
-				await WalletDeployment.bulkWrite(fundingBulkOps)
+				try {
+					await WalletDeployment.bulkWrite(fundingBulkOps)
+				} catch {
+					// Seeder will update retroactively if DB fails here
+				}
 			}
 		}
 
@@ -1346,7 +1359,8 @@ export async function settleDeploymentBySmartWallet(request: FastifyRequest, rep
 					deploymentCompleted: false,
 					fundingAmount: wallet.fundingAmount,
 					fundingRequested: !!wallet.fundingAmount,
-					fundingCompleted: false
+					fundingCompleted: false,
+					userOpNonce: userOp.nonce // Seeder matching
 				}))
 			)
 			dbRecordsCreated = true
@@ -1400,15 +1414,19 @@ export async function settleDeploymentBySmartWallet(request: FastifyRequest, rep
 
 		// Update DB entries with payment details
 		// Note: Since UserOp executed successfully, all payments (fees + funding) completed atomically
-		await WalletDeployment.updateMany(
-			{ walletAddress: { $in: walletAddressesToCheck } },
-			{
-				$set: {
-					paymentTxHash: paymentTxHash.toLowerCase(),
-					paymentCompleted: true
+		try {
+			await WalletDeployment.updateMany(
+				{ walletAddress: { $in: walletAddressesToCheck } },
+				{
+					$set: {
+						paymentTxHash: paymentTxHash.toLowerCase(),
+						paymentCompleted: true
+					}
 				}
-			}
-		)
+			)
+		} catch {
+			// Seeder will update retroactively if DB fails here
+		}
 
 		// Get provider and signer
 		const providerService = getProviderService()
@@ -1483,7 +1501,11 @@ export async function settleDeploymentBySmartWallet(request: FastifyRequest, rep
 					}
 				}
 			}))
-			await WalletDeployment.bulkWrite(bulkOps)
+			try {
+				await WalletDeployment.bulkWrite(bulkOps)
+			} catch {
+				// Seeder will update retroactively if DB fails here
+			}
 		}
 
 		// Determine overall success flags
