@@ -104,9 +104,9 @@ async function generateTestSignature() {
 		process.env.B402_RELAYER_ADDRESS || '0x0000000000000000000000000000000000000000'
 	const recipientAddress = '0x0553B926D6a599CAAc56377042cA6B40dd0b7F4e'
 
-	console.log('Token:', tokenAddress)
-	console.log('Relayer:', relayerAddress)
-	console.log('Recipient:', recipientAddress)
+	console.log('Token: ', tokenAddress)
+	console.log('Relayer: ', relayerAddress)
+	console.log('Recipient: ', recipientAddress)
 
 	await checkAndApproveToken(wallet, tokenAddress, relayerAddress, rpcUrl)
 
@@ -150,7 +150,7 @@ async function generateTestSignature() {
 		}
 	}
 
-	console.log('\nPayload:')
+	console.log('\nPayload: ')
 	console.log(JSON.stringify(payload, null, 2))
 
 	console.log(`\nPOST ${liveApiUrl}/api/v1/verify`)

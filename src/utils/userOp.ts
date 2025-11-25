@@ -1,9 +1,10 @@
 import { ethers } from 'ethers'
 
 import { B402_RELAYER_ABI, SUPPORTED_TOKENS } from '../constants'
+import type { UserOperation } from '../schema/b402'
 import { env } from '../schema/env'
 import { BaseErrors } from '../schema/errors'
-import type { BatchCall, UserOperationParams } from '../types/wallet'
+import type { BatchCall } from '../types/wallet'
 import { getProvider, getTokenAllowance, getWalletNonce, isWalletDeployed } from './wallet'
 
 const SIMPLE_ACCOUNT_ABI = [
@@ -23,7 +24,7 @@ function encodeApprove(spender: string, amount: bigint): string {
 	return iface.encodeFunctionData('approve', [spender, amount])
 }
 
-function encodeExecuteBatch(calls: BatchCall[]): string {
+export function encodeExecuteBatch(calls: BatchCall[]): string {
 	const iface = new ethers.Interface(SIMPLE_ACCOUNT_ABI)
 	const dests = calls.map((c) => c.to)
 	const values = calls.map((c) => c.value)
@@ -55,7 +56,7 @@ export async function createPaymentUserOpOrThrow(params: {
 	validAfter: number
 	validBefore: number
 	nonce: string
-}): Promise<UserOperationParams> {
+}): Promise<UserOperation> {
 	const {
 		walletAddress,
 		recipients,
@@ -71,7 +72,7 @@ export async function createPaymentUserOpOrThrow(params: {
 		throw new BaseErrors.ERR_INVALID_ADDRESS()
 	}
 
-	// Verify wallet is deployed
+	// Validate wallet is deployed
 	const deployed = await isWalletDeployed(walletAddress)
 	if (!deployed) {
 		throw new BaseErrors.ERR_WALLET_NOT_DEPLOYED()
@@ -126,7 +127,7 @@ export async function createPaymentUserOpOrThrow(params: {
 	const totalPaymentAmount = paymentAmounts.reduce((sum, amt) => sum + amt, 0n)
 
 	// Add b402 fee
-	const feeAmount = ethers.parseUnits(env.WALLET_FEE_AMOUNT, tokenConfig.decimals)
+	const feeAmount = ethers.parseUnits(env.WALLET_PAYMENT_FEE, tokenConfig.decimals)
 
 	// Calculate total amount needed for this transaction (all payments + fee)
 	const totalAmountNeeded = totalPaymentAmount + feeAmount
@@ -173,7 +174,7 @@ export async function createPaymentUserOpOrThrow(params: {
 	const maxFeePerGas = (baseGasPrice * 12n) / 10n
 	const maxPriorityFeePerGas = ethers.parseUnits('0.4', 'gwei')
 
-	const userOp: UserOperationParams = {
+	const userOp: UserOperation = {
 		sender: walletAddress,
 		nonce: ethers.toBeHex(nonce),
 		factory: undefined,
@@ -194,7 +195,7 @@ export async function createPaymentUserOpOrThrow(params: {
 	return userOp
 }
 
-export function validateFeeIncluded(userOp: UserOperationParams): boolean {
+export function validateFeeIncluded(userOp: UserOperation): boolean {
 	try {
 		const calls = decodeExecuteBatch(userOp.callData)
 		const hasBatchTransferWithFee = calls.some((call) => {
@@ -223,7 +224,7 @@ export function validateFeeIncluded(userOp: UserOperationParams): boolean {
 				if (!tokenConfig) return false
 
 				const feeAmount = amounts[feeRecipientIndex]
-				const expectedFee = ethers.parseUnits(env.WALLET_FEE_AMOUNT, tokenConfig.decimals)
+				const expectedFee = ethers.parseUnits(env.WALLET_PAYMENT_FEE, tokenConfig.decimals)
 				return feeAmount === expectedFee
 			} catch {
 				return false
@@ -238,7 +239,7 @@ export function validateFeeIncluded(userOp: UserOperationParams): boolean {
 }
 
 // TODO: Consider using gas estimation after building a valid UserOp to refine the final estimate
-export async function estimateUserOpGas(userOp: UserOperationParams): Promise<{
+export async function estimateUserOpGas(userOp: UserOperation): Promise<{
 	callGasLimit: string
 	verificationGasLimit: string
 	preVerificationGas: string
@@ -293,7 +294,7 @@ export async function estimateUserOpGas(userOp: UserOperationParams): Promise<{
 	return result.result
 }
 
-export async function submitUserOpToBundler(userOp: UserOperationParams): Promise<string> {
+export async function submitUserOpToBundler(userOp: UserOperation): Promise<string> {
 	const response = await fetch(env.BUNDLER_RPC_URL, {
 		method: 'POST',
 		headers: {

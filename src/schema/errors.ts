@@ -11,6 +11,7 @@ export type ErrorCodes =
 	| 'validation_error'
 	| 'payment_verification_error'
 	| 'payment_settlement_error'
+	| 'payment_error'
 	| 'blockchain_error'
 	| 'signature_error'
 	| 'nonce_error'
@@ -30,6 +31,7 @@ const errorCodeToHttpStatus: Record<ErrorCodes, number> = {
 	validation_error: 400,
 	payment_verification_error: 400,
 	payment_settlement_error: 500,
+	payment_error: 400,
 	blockchain_error: 500,
 	signature_error: 401,
 	nonce_error: 400,
@@ -254,13 +256,49 @@ const errorCodesConfig = {
 		code: 'validation_error' as const,
 		message: 'Invalid address provided'
 	},
-	ERR_WALLET_ALREADY_DEPLOYED: {
-		code: 'wallet_error' as const,
-		message: 'Wallet already deployed'
-	},
 	ERR_WALLET_NOT_DEPLOYED: {
 		code: 'wallet_error' as const,
 		message: 'Wallet not deployed'
+	},
+	ERR_WALLET_ALREADY_PAID: {
+		code: 'wallet_error' as const,
+		message: 'Payment already exists for this wallet address'
+	},
+	ERR_WALLET_ALREADY_DEPLOYED: {
+		code: 'wallet_error' as const,
+		message: 'Wallet for this address has already been deployed'
+	},
+	ERR_MISSING_DEPLOYMENT_PARAMS: {
+		code: 'validation_error' as const,
+		message: 'Missing deployment parameters (ownerAddress and salt required)'
+	},
+	ERR_INVALID_WALLET_COUNT: {
+		code: 'validation_error' as const,
+		message: 'Wallet count must be between 1 and 10'
+	},
+	ERR_INCORRECT_DEPLOYMENT_FEE: {
+		code: 'payment_error' as const,
+		message: 'Wrong deployment fee payment'
+	},
+	ERR_WALLET_DEPLOYMENT_FAILED: {
+		code: 'blockchain_error' as const,
+		message: 'Failed to deploy wallets'
+	},
+	ERR_INVALID_FEE_RECIPIENT: {
+		code: 'payment_error' as const,
+		message: 'Payment recipient must be the designated fee recipient'
+	},
+	ERR_INVALID_TX_HASH: {
+		code: 'validation_error' as const,
+		message: 'Invalid transaction hash format'
+	},
+	ERR_NO_PENDING_DEPLOYMENTS: {
+		code: 'not_found' as const,
+		message: 'No pending wallet deployments found for this payment transaction'
+	},
+	ERR_MISSING_CLAIM_PARAMS: {
+		code: 'validation_error' as const,
+		message: 'Either paymentTxHash or payerAddress must be provided'
 	},
 	ERR_UNSUPPORTED_TOKEN: {
 		code: 'token_error' as const,

@@ -1,12 +1,13 @@
 import { ethers } from 'ethers'
 
+import { B402_RELAYER_ABI } from '../constants'
+import type { UserOperation } from '../schema/b402'
 import { env } from '../schema/env'
 import { BaseErrors } from '../schema/errors'
-import type { UserOperationParams } from '../types/wallet'
-import { validateFeeIncluded } from './userOp'
+import { decodeExecuteBatch } from './userOp'
 
 function getVerifyingPaymasterHash(
-	userOp: UserOperationParams,
+	userOp: UserOperation,
 	validUntil: number,
 	validAfter: number,
 	chainId: number
@@ -78,7 +79,7 @@ function getPaymasterSigner(): ethers.Wallet {
 	return paymasterSignerInstance
 }
 
-export function validateBeforeSigning(userOp: UserOperationParams): {
+export function validateBeforeSigning(userOp: UserOperation): {
 	valid: boolean
 	reason?: string
 } {
@@ -87,19 +88,47 @@ export function validateBeforeSigning(userOp: UserOperationParams): {
 		return { valid: true }
 	}
 
-	// Check if fee is included for payment operations
-	const hasFee = validateFeeIncluded(userOp)
-	if (!hasFee) {
+	// For wallet deployment and payment operations, validate that fee is included to `WALLET_FEE_RECIPIENT`
+	// Note: The controller validates the exact fee amount before calling this
+	try {
+		const calls = decodeExecuteBatch(userOp.callData)
+		const hasRelayerCall = calls.some((call) => {
+			if (call.to.toLowerCase() !== env.B402_RELAYER_ADDRESS.toLowerCase()) {
+				return false
+			}
+
+			try {
+				const iface = new ethers.Interface(B402_RELAYER_ABI)
+				const decoded = iface.decodeFunctionData('batchTransferWithUserOp', call.data)
+				const recipients = decoded[1] as string[]
+
+				// Check if fee recipient is included
+				const hasFeeRecipient = recipients.some(
+					(r) => r.toLowerCase() === env.WALLET_FEE_RECIPIENT.toLowerCase()
+				)
+				return hasFeeRecipient
+			} catch {
+				return false
+			}
+		})
+
+		if (!hasRelayerCall) {
+			return {
+				valid: false,
+				reason: `Fee transfer not found. Required: Payment to ${env.WALLET_FEE_RECIPIENT}`
+			}
+		}
+		return { valid: true }
+	} catch (error) {
 		return {
 			valid: false,
-			reason: `Fee transfer not found. Required: ${env.WALLET_FEE_AMOUNT} USDT to ${env.WALLET_FEE_RECIPIENT}`
+			reason: 'Failed to validate UserOp structure'
 		}
 	}
-	return { valid: true }
 }
 
 export async function signUserOp(
-	userOp: UserOperationParams,
+	userOp: UserOperation,
 	chainId: number
 ): Promise<{
 	paymaster: string
@@ -147,7 +176,7 @@ export function getPaymasterSignerAddress(): string {
 }
 
 export async function getUserOpHash(
-	userOp: UserOperationParams,
+	userOp: UserOperation,
 	entryPointAddress: string,
 	chainId: number
 ): Promise<string> {
@@ -212,7 +241,7 @@ export async function getUserOpHash(
 }
 
 export async function verifyPaymasterSignature(
-	userOp: UserOperationParams,
+	userOp: UserOperation,
 	chainId: number,
 	signature: string
 ): Promise<boolean> {
