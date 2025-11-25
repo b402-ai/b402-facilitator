@@ -26,16 +26,17 @@ import {
 	health,
 	settle,
 	settleDeploymentByEOA,
-	settleDeploymentByWallet,
+	settleDeploymentBySmartWallet,
 	settleWalletPayment,
 	verify,
 	verifyDeploymentByEOA,
-	verifyDeploymentByWallet,
+	verifyDeploymentBySmartWallet,
 	verifyWalletPayment
 } from './b402Controller'
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 export const register = (server: FastifyInstance, _: any, next: any) => {
+	// Vanilla payments
 	server.post(
 		'/verify',
 		{
@@ -62,7 +63,7 @@ export const register = (server: FastifyInstance, _: any, next: any) => {
 		settle
 	)
 
-	// Smart Wallet Routes
+	// Smart wallet payments
 	server.post(
 		'/wallet/verify',
 		{
@@ -89,7 +90,7 @@ export const register = (server: FastifyInstance, _: any, next: any) => {
 		settleWalletPayment
 	)
 
-	// Wallet Deployment Routes - EOA (EIP712) Payment
+	// Smart wallet deployment via EIP712 payment
 	server.post(
 		'/deploy/verify',
 		{
@@ -116,7 +117,7 @@ export const register = (server: FastifyInstance, _: any, next: any) => {
 		settleDeploymentByEOA
 	)
 
-	// Wallet Deployment Routes - Smart Wallet Payment
+	// Smart wallet deployment via userOp payment
 	server.post(
 		'/deploy/wallet/verify',
 		{
@@ -127,7 +128,7 @@ export const register = (server: FastifyInstance, _: any, next: any) => {
 				}
 			}
 		},
-		verifyDeploymentByWallet
+		verifyDeploymentBySmartWallet
 	)
 
 	server.post(
@@ -140,9 +141,10 @@ export const register = (server: FastifyInstance, _: any, next: any) => {
 				}
 			}
 		},
-		settleDeploymentByWallet
+		settleDeploymentBySmartWallet
 	)
 
+	// Smart wallet management
 	server.post(
 		'/wallet/claim',
 		{
@@ -168,6 +170,7 @@ export const register = (server: FastifyInstance, _: any, next: any) => {
 		getWalletsByOwner
 	)
 
+	// Server
 	server.get(
 		'/health',
 		{

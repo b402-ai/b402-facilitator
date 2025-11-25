@@ -746,6 +746,46 @@ export async function settleDeploymentByEOA(request: FastifyRequest, reply: Fast
 			throw new BaseErrors.ERR_WALLET_ALREADY_PAID()
 		}
 
+		// Create DB entries before executing payment and throw if DB fails
+		// Note: We do this to prevent payment going through with a failed DB
+		let dbRecordsCreated = false
+		try {
+			await WalletDeployment.insertMany(
+				wallets.map((wallet) => {
+					// Find the funding payment for this wallet
+					const fundingPayment = hasFunding
+						? paymentPayload.find(
+								(p) => p.payload.authorization.to.toLowerCase() === wallet.address.toLowerCase()
+							)
+						: undefined
+
+					return {
+						ownerAddress: wallet.owner.toLowerCase(),
+						walletAddress: wallet.address.toLowerCase(),
+						salt: wallet.salt,
+						payerAddress: authorization.from.toLowerCase(),
+						paymentTxHash: '', // Will be set after payment confirmation
+						paymentCompleted: false, // Will be set to true after payment confirmation
+						deploymentCompleted: false,
+						fundingAmount: wallet.fundingAmount,
+						fundingRequested: !!wallet.fundingAmount,
+						fundingCompleted: false,
+						// Store funding payment data for retry in case funding fails
+						...(fundingPayment && {
+							fundingPaymentData: {
+								token: fundingPayment.token,
+								authorization: fundingPayment.payload.authorization,
+								signature: fundingPayment.payload.signature
+							}
+						})
+					}
+				})
+			)
+			dbRecordsCreated = true
+		} catch (error) {
+			throw new BaseErrors.ERR_INTERNAL_SERVER_ERROR()
+		}
+
 		// Execute fee payment to us first (deployment fee + funding fees)
 		const relayerWallet = new Wallet(request.server.config.RELAYER_PRIVATE_KEY)
 		const signer = relayerWallet.connect(provider)
@@ -773,42 +813,24 @@ export async function settleDeploymentByEOA(request: FastifyRequest, reply: Fast
 			const paymentReceipt = await paymentTx.wait()
 			paymentTxHash = paymentReceipt?.hash || paymentTx.hash
 		} catch (error) {
-			console.log(JSON.stringify(error))
+			// Rollback DB since payment transaction failed
+			if (dbRecordsCreated) {
+				await WalletDeployment.deleteMany({
+					walletAddress: { $in: walletAddressesToCheck }
+				})
+			}
 			throw new BaseErrors.ERR_BLOCKCHAIN_TRANSACTION_FAILED()
 		}
 
-		// Create DB entries for wallets after successful payment
-		// For EOA deployments with funding, store the funding payment data for potential retry via /claim
-		await WalletDeployment.insertMany(
-			wallets.map((wallet) => {
-				// Find the funding payment for this wallet
-				const fundingPayment = hasFunding
-					? paymentPayload.find(
-							(p) => p.payload.authorization.to.toLowerCase() === wallet.address.toLowerCase()
-						)
-					: undefined
-
-				return {
-					ownerAddress: wallet.owner.toLowerCase(),
-					walletAddress: wallet.address.toLowerCase(),
-					salt: wallet.salt,
-					payerAddress: authorization.from.toLowerCase(),
+		// Update DB entries with payment details after successful payment
+		await WalletDeployment.updateMany(
+			{ walletAddress: { $in: walletAddressesToCheck } },
+			{
+				$set: {
 					paymentTxHash: paymentTxHash.toLowerCase(),
-					paymentCompleted: true,
-					deploymentCompleted: false,
-					fundingAmount: wallet.fundingAmount,
-					fundingRequested: !!wallet.fundingAmount,
-					fundingCompleted: false,
-					// Store funding payment data for retry in case funding fails
-					...(fundingPayment && {
-						fundingPaymentData: {
-							token: fundingPayment.token,
-							authorization: fundingPayment.payload.authorization,
-							signature: fundingPayment.payload.signature
-						}
-					})
+					paymentCompleted: true
 				}
-			})
+			}
 		)
 
 		// Deploy wallets and track results
@@ -989,7 +1011,7 @@ export async function settleDeploymentByEOA(request: FastifyRequest, reply: Fast
  * @param reply
  * @returns
  */
-export async function verifyDeploymentByWallet(request: FastifyRequest, reply: FastifyReply) {
+export async function verifyDeploymentBySmartWallet(request: FastifyRequest, reply: FastifyReply) {
 	try {
 		const body = request.body as DeployWalletVerifyRequest
 		const { paymentRequirements } = body
@@ -1199,7 +1221,7 @@ export async function verifyDeploymentByWallet(request: FastifyRequest, reply: F
  * @param reply
  * @returns
  */
-export async function settleDeploymentByWallet(request: FastifyRequest, reply: FastifyReply) {
+export async function settleDeploymentBySmartWallet(request: FastifyRequest, reply: FastifyReply) {
 	try {
 		const body = request.body as DeployWalletSettleRequest
 		const { userOp, signature, paymentRequirements, wallets } = body
@@ -1309,12 +1331,41 @@ export async function settleDeploymentByWallet(request: FastifyRequest, reply: F
 			throw new BaseErrors.ERR_WALLET_ALREADY_PAID()
 		}
 
+		// Create DB entries before submitting UserOp and throw if DB fails
+		// Note: We do this to prevent payment going through with a failed DB
+		let dbRecordsCreated = false
+		try {
+			await WalletDeployment.insertMany(
+				wallets.map((wallet) => ({
+					ownerAddress: wallet.owner.toLowerCase(),
+					walletAddress: wallet.address.toLowerCase(),
+					salt: wallet.salt,
+					payerAddress: payerWalletAddress.toLowerCase(),
+					paymentTxHash: '', // Will be set after confirmation
+					paymentCompleted: false, // Will be set to true after confirmation
+					deploymentCompleted: false,
+					fundingAmount: wallet.fundingAmount,
+					fundingRequested: !!wallet.fundingAmount,
+					fundingCompleted: false
+				}))
+			)
+			dbRecordsCreated = true
+		} catch (error) {
+			throw new BaseErrors.ERR_INTERNAL_SERVER_ERROR()
+		}
+
 		// Submit UserOp to bundler
 		userOp.signature = signature
 		let userOpHash: string
 		try {
 			userOpHash = await submitUserOpToBundler(userOp)
 		} catch (error) {
+			// Rollback DB since UserOp submission failed
+			if (dbRecordsCreated) {
+				await WalletDeployment.deleteMany({
+					walletAddress: { $in: walletAddressesToCheck }
+				})
+			}
 			throw new BaseErrors.ERR_BUNDLER_SUBMISSION_FAILED()
 		}
 
@@ -1335,29 +1386,28 @@ export async function settleDeploymentByWallet(request: FastifyRequest, reply: F
 					// Continue polling
 				}
 			}
-		} catch (error) {
-			console.log('Error waiting for receipt:', error)
-		}
-
-		if (!paymentSuccess || !paymentTxHash) {
+		} catch {
 			throw new BaseErrors.ERR_TRANSACTION_CONFIRMATION_FAILED()
 		}
 
-		// Create DB entries for wallets after successful payment
+		if (!paymentSuccess || !paymentTxHash) {
+			// Rollback DB since payment failed
+			await WalletDeployment.deleteMany({
+				walletAddress: { $in: walletAddressesToCheck }
+			})
+			throw new BaseErrors.ERR_TRANSACTION_CONFIRMATION_FAILED()
+		}
+
+		// Update DB entries with payment details
 		// Note: Since UserOp executed successfully, all payments (fees + funding) completed atomically
-		await WalletDeployment.insertMany(
-			wallets.map((wallet) => ({
-				ownerAddress: wallet.owner.toLowerCase(),
-				walletAddress: wallet.address.toLowerCase(),
-				salt: wallet.salt,
-				payerAddress: payerWalletAddress.toLowerCase(),
-				paymentTxHash: paymentTxHash.toLowerCase(),
-				paymentCompleted: true,
-				deploymentCompleted: false,
-				fundingAmount: wallet.fundingAmount,
-				fundingRequested: !!wallet.fundingAmount,
-				fundingCompleted: false // Will be set to true after deployment if funding was requested
-			}))
+		await WalletDeployment.updateMany(
+			{ walletAddress: { $in: walletAddressesToCheck } },
+			{
+				$set: {
+					paymentTxHash: paymentTxHash.toLowerCase(),
+					paymentCompleted: true
+				}
+			}
 		)
 
 		// Get provider and signer
@@ -1413,7 +1463,7 @@ export async function settleDeploymentByWallet(request: FastifyRequest, reply: F
 					salt: wallet.salt,
 					owner: wallet.owner
 				})
-				// Continue to next wallet, don't throw - support partial successes
+				// Support partial successes, don't throw
 				// Note: Failed wallet deployments can be retried via the `/claim` route
 				// Note: If funding succeeded, the tokens will be accessible once the wallet is successfully deployed
 			}
@@ -1477,7 +1527,7 @@ export async function getWalletsByOwner(request: FastifyRequest, reply: FastifyR
 		// Find all wallets for this owner
 		const deployments = await WalletDeployment.find({
 			ownerAddress: owner.toLowerCase()
-		}).sort({ createdAt: -1 }) // Most recent first
+		}).sort({ createdAt: -1 })
 
 		// TODO: Consider caching this
 

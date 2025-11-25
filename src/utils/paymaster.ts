@@ -83,14 +83,13 @@ export function validateBeforeSigning(userOp: UserOperation): {
 	valid: boolean
 	reason?: string
 } {
-	// Skip fee validation for deployment operations (initCode present)
+	// Skip fee validation for deployment operations
 	if (userOp.callData === '0x') {
 		return { valid: true }
 	}
 
-	// For wallet deployment and payment operations, validate that fee is included to WALLET_FEE_RECIPIENT
-	// We don't validate the exact amount here since deployment fees are variable (based on number of wallets)
-	// The controller validates the exact fee amount before calling this
+	// For wallet deployment and payment operations, validate that fee is included to `WALLET_FEE_RECIPIENT`
+	// Note: The controller validates the exact fee amount before calling this
 	try {
 		const calls = decodeExecuteBatch(userOp.callData)
 		const hasRelayerCall = calls.some((call) => {
