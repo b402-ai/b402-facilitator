@@ -1562,6 +1562,10 @@ export async function getWalletsByOwner(request: FastifyRequest, reply: FastifyR
 			deploymentTxHash: d.deploymentTxHash,
 			paymentCompleted: d.paymentCompleted,
 			deploymentCompleted: d.deploymentCompleted,
+			fundingRequested: d.fundingRequested,
+			fundingCompleted: d.fundingCompleted,
+			fundingAmount: d.fundingAmount,
+			fundingTxHash: d.fundingTxHash,
 			createdAt: d.createdAt.toISOString(),
 			updatedAt: d.updatedAt.toISOString()
 		}))
