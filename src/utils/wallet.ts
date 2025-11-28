@@ -42,7 +42,10 @@ export function getFactoryContract(): ethers.Contract {
 	)
 }
 
-export async function computeWalletAddress(ownerAddress: string, salt = 0): Promise<string> {
+export async function computeWalletAddress(
+	ownerAddress: string,
+	salt: number | bigint = 0
+): Promise<string> {
 	if (!ethers.isAddress(ownerAddress)) {
 		throw new BaseErrors.ERR_INVALID_ADDRESS()
 	}
@@ -51,6 +54,44 @@ export async function computeWalletAddress(ownerAddress: string, salt = 0): Prom
 	const walletAddress = await factory.getFunction('getAddress')(ownerAddress, salt)
 
 	return walletAddress
+}
+
+/**
+ * Compute the deterministic b402 master wallet salt for a given owner address
+ * Formula: keccak256("b402-${reversed-normalized-address}")
+ *
+ * @param ownerAddress
+ * @returns
+ */
+export function getMasterWalletSalt(ownerAddress: string): bigint {
+	if (!ethers.isAddress(ownerAddress)) {
+		throw new BaseErrors.ERR_INVALID_ADDRESS()
+	}
+
+	// Normalize address to lowercase and remove "0x" prefix
+	const normalizedAddress = ownerAddress.toLowerCase().slice(2)
+
+	// Reverse the hex string
+	const reversedAddress = normalizedAddress.split('').reverse().join('')
+
+	// Create the salt string: "b402-{reversedAddress}"
+	const saltString = `b402-${reversedAddress}`
+
+	// Compute keccak256 hash and return as bigint
+	const saltHash = ethers.keccak256(ethers.toUtf8Bytes(saltString))
+
+	return BigInt(saltHash)
+}
+
+/**
+ * Compute the deterministic b402 master wallet address for a given owner
+ *
+ * @param ownerAddress
+ * @returns
+ */
+export async function computeMasterWalletAddress(ownerAddress: string): Promise<string> {
+	const salt = getMasterWalletSalt(ownerAddress)
+	return computeWalletAddress(ownerAddress, salt)
 }
 
 export async function isWalletDeployed(address: string): Promise<boolean> {

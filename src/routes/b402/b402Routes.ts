@@ -9,6 +9,7 @@ import {
 	DeployWalletVerifyRequestSchema,
 	DeployWalletsResponseSchema,
 	DeployWalletsVerifyResponseSchema,
+	GetMasterWalletAddressResponseSchema,
 	GetWalletsByOwnerResponseSchema,
 	HealthResponseSchema,
 	SettleRequestSchema,
@@ -22,6 +23,7 @@ import {
 } from '../../schema/b402'
 import {
 	claimWalletDeployment,
+	getMasterWalletAddress,
 	getWalletsByOwner,
 	health,
 	settle,
@@ -168,6 +170,18 @@ export const register = (server: FastifyInstance, _: any, next: any) => {
 			}
 		},
 		getWalletsByOwner
+	)
+
+	server.get(
+		'/wallet/:owner/master',
+		{
+			schema: {
+				response: {
+					200: GetMasterWalletAddressResponseSchema
+				}
+			}
+		},
+		getMasterWalletAddress
 	)
 
 	// Server
