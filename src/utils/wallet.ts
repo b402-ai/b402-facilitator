@@ -2,6 +2,7 @@ import { ethers } from 'ethers'
 
 import { env } from '../schema/env'
 import { BaseErrors } from '../schema/errors'
+import { getMasterWalletCache, setMasterWalletCache } from './masterWalletCache'
 
 const SIMPLE_ACCOUNT_FACTORY_ABI = [
 	'function getAddress(address owner, uint256 salt) view returns (address)',
@@ -58,7 +59,7 @@ export async function computeWalletAddress(
 
 /**
  * Compute the deterministic b402 master wallet salt for a given owner address
- * Formula: keccak256("b402-${reversed-normalized-address}")
+ * Formula: keccak256(`b402-${reversed-normalized-address}`)
  *
  * @param ownerAddress
  * @returns
@@ -72,26 +73,35 @@ export function getMasterWalletSalt(ownerAddress: string): bigint {
 	const normalizedAddress = ownerAddress.toLowerCase().slice(2)
 
 	// Reverse the hex string
-	const reversedAddress = normalizedAddress.split('').reverse().join('')
+	const reversedNormalizedAddress = normalizedAddress.split('').reverse().join('')
 
-	// Create the salt string: "b402-{reversedAddress}"
-	const saltString = `b402-${reversedAddress}`
+	// Create the salt string: "b402-{reversed-normalized-address}"
+	const saltString = `b402-${reversedNormalizedAddress}`
 
 	// Compute keccak256 hash and return as bigint
-	const saltHash = ethers.keccak256(ethers.toUtf8Bytes(saltString))
-
-	return BigInt(saltHash)
+	return BigInt(ethers.keccak256(ethers.toUtf8Bytes(saltString)))
 }
 
 /**
  * Compute the deterministic b402 master wallet address for a given owner
+ * Uses a cache store
  *
  * @param ownerAddress
  * @returns
  */
 export async function computeMasterWalletAddress(ownerAddress: string): Promise<string> {
+	const cached = getMasterWalletCache(ownerAddress)
+	if (cached) {
+		return cached
+	}
+
 	const salt = getMasterWalletSalt(ownerAddress)
-	return computeWalletAddress(ownerAddress, salt)
+	const walletAddress = await computeWalletAddress(ownerAddress, salt)
+
+	// Store in cache
+	setMasterWalletCache(ownerAddress, walletAddress)
+
+	return walletAddress
 }
 
 export async function isWalletDeployed(address: string): Promise<boolean> {
