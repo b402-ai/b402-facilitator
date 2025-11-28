@@ -344,7 +344,7 @@ export const ClaimWalletDeploymentResponseSchema = {
 export const GetWalletsByOwnerResponseSchema = {
 	type: 'object',
 	properties: {
-		wallets: {
+		master: {
 			type: 'array',
 			items: {
 				type: 'object',
@@ -357,6 +357,44 @@ export const GetWalletsByOwnerResponseSchema = {
 					deploymentTxHash: { type: 'string' },
 					paymentCompleted: { type: 'boolean' },
 					deploymentCompleted: { type: 'boolean' },
+					fundingRequested: { type: 'boolean' },
+					fundingCompleted: { type: 'boolean' },
+					fundingAmount: { type: 'string' },
+					fundingTxHash: { type: 'string' },
+					createdAt: { type: 'string' },
+					updatedAt: { type: 'string' }
+				},
+				required: [
+					'ownerAddress',
+					'walletAddress',
+					'salt',
+					'payerAddress',
+					'paymentTxHash',
+					'paymentCompleted',
+					'deploymentCompleted',
+					'createdAt',
+					'updatedAt'
+				],
+				additionalProperties: false
+			}
+		},
+		sub: {
+			type: 'array',
+			items: {
+				type: 'object',
+				properties: {
+					ownerAddress: { type: 'string' },
+					walletAddress: { type: 'string' },
+					salt: { type: 'string' },
+					payerAddress: { type: 'string' },
+					paymentTxHash: { type: 'string' },
+					deploymentTxHash: { type: 'string' },
+					paymentCompleted: { type: 'boolean' },
+					deploymentCompleted: { type: 'boolean' },
+					fundingRequested: { type: 'boolean' },
+					fundingCompleted: { type: 'boolean' },
+					fundingAmount: { type: 'string' },
+					fundingTxHash: { type: 'string' },
 					createdAt: { type: 'string' },
 					updatedAt: { type: 'string' }
 				},
@@ -375,7 +413,7 @@ export const GetWalletsByOwnerResponseSchema = {
 			}
 		}
 	},
-	required: ['wallets'],
+	required: ['master', 'sub'],
 	additionalProperties: false
 } as const
 
@@ -775,5 +813,24 @@ export interface WalletDeploymentRecord {
 }
 
 export interface GetWalletsByOwnerResponse {
-	wallets: WalletDeploymentRecord[]
+	master: WalletDeploymentRecord[]
+	sub: WalletDeploymentRecord[]
+}
+
+// GET /wallet/:owner/master - Response
+export const GetMasterWalletAddressResponseSchema = {
+	type: 'object',
+	properties: {
+		ownerAddress: { type: 'string' },
+		masterWalletAddress: { type: 'string' },
+		salt: { type: 'string' }
+	},
+	required: ['ownerAddress', 'masterWalletAddress', 'salt'],
+	additionalProperties: false
+} as const
+
+export interface GetMasterWalletAddressResponse {
+	ownerAddress: string
+	masterWalletAddress: string
+	salt: string
 }

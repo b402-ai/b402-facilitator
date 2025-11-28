@@ -2,6 +2,7 @@ import { ethers } from 'ethers'
 
 import { env } from '../schema/env'
 import { BaseErrors } from '../schema/errors'
+import { getMasterWalletCache, setMasterWalletCache } from './masterWalletCache'
 
 const SIMPLE_ACCOUNT_FACTORY_ABI = [
 	'function getAddress(address owner, uint256 salt) view returns (address)',
@@ -42,13 +43,63 @@ export function getFactoryContract(): ethers.Contract {
 	)
 }
 
-export async function computeWalletAddress(ownerAddress: string, salt = 0): Promise<string> {
+export async function computeWalletAddress(
+	ownerAddress: string,
+	salt: number | bigint = 0
+): Promise<string> {
 	if (!ethers.isAddress(ownerAddress)) {
 		throw new BaseErrors.ERR_INVALID_ADDRESS()
 	}
 
 	const factory = getFactoryContract()
 	const walletAddress = await factory.getFunction('getAddress')(ownerAddress, salt)
+
+	return walletAddress
+}
+
+/**
+ * Compute the deterministic b402 master wallet salt for a given owner address
+ * Formula: keccak256(`b402-${reversed-normalized-address}`)
+ *
+ * @param ownerAddress
+ * @returns
+ */
+export function getMasterWalletSalt(ownerAddress: string): bigint {
+	if (!ethers.isAddress(ownerAddress)) {
+		throw new BaseErrors.ERR_INVALID_ADDRESS()
+	}
+
+	// Normalize address to lowercase and remove "0x" prefix
+	const normalizedAddress = ownerAddress.toLowerCase().slice(2)
+
+	// Reverse the hex string
+	const reversedNormalizedAddress = normalizedAddress.split('').reverse().join('')
+
+	// Create the salt string: "b402-{reversed-normalized-address}"
+	const saltString = `b402-${reversedNormalizedAddress}`
+
+	// Compute keccak256 hash and return as bigint
+	return BigInt(ethers.keccak256(ethers.toUtf8Bytes(saltString)))
+}
+
+/**
+ * Compute the deterministic b402 master wallet address for a given owner
+ * Uses a cache store
+ *
+ * @param ownerAddress
+ * @returns
+ */
+export async function computeMasterWalletAddress(ownerAddress: string): Promise<string> {
+	const cached = getMasterWalletCache(ownerAddress)
+	if (cached) {
+		return cached
+	}
+
+	const salt = getMasterWalletSalt(ownerAddress)
+	const walletAddress = await computeWalletAddress(ownerAddress, salt)
+
+	// Store in cache
+	setMasterWalletCache(ownerAddress, walletAddress)
 
 	return walletAddress
 }

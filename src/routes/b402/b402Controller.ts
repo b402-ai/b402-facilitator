@@ -10,6 +10,7 @@ import type {
 	DeployWalletVerifyRequest,
 	DeployWalletsResponse,
 	DeployWalletsVerifyResponse,
+	GetMasterWalletAddressResponse,
 	HealthResponse,
 	SettleRequest,
 	SettleResponse,
@@ -35,6 +36,8 @@ import {
 	validateFeeIncluded
 } from '../../utils/userOp'
 import {
+	computeMasterWalletAddress,
+	getMasterWalletSalt,
 	getTokenAllowance,
 	getTokenBalance,
 	getWalletNonce,
@@ -1531,7 +1534,7 @@ export async function settleDeploymentBySmartWallet(request: FastifyRequest, rep
 
 /**
  * Function for route `/wallet/:owner`
- * Get all wallet deployments for a given owner address
+ * Get all wallet deployments for a given owner address (always includes master wallet details even if not deployed)
  *
  * @param request
  * @param reply
@@ -1546,31 +1549,122 @@ export async function getWalletsByOwner(request: FastifyRequest, reply: FastifyR
 			throw new BaseErrors.ERR_INVALID_ADDRESS()
 		}
 
+		// Compute master wallet salt and address for this owner
+		const masterSalt = getMasterWalletSalt(owner).toString()
+		const masterWalletAddress = await computeMasterWalletAddress(owner)
+
 		// Find all wallets for this owner
 		const deployments = await WalletDeployment.find({
 			ownerAddress: owner.toLowerCase()
 		}).sort({ createdAt: -1 })
 
-		// TODO: Consider caching this
+		const master: Array<{
+			ownerAddress: string
+			walletAddress: string
+			salt: string
+			payerAddress: string
+			paymentTxHash: string
+			deploymentTxHash?: string
+			paymentCompleted: boolean
+			deploymentCompleted: boolean
+			fundingRequested: boolean
+			fundingCompleted: boolean
+			fundingAmount?: string
+			fundingTxHash?: string
+			createdAt: string
+			updatedAt: string
+		}> = []
 
-		const wallets = deployments.map((d) => ({
-			ownerAddress: d.ownerAddress,
-			walletAddress: d.walletAddress,
-			salt: d.salt,
-			payerAddress: d.payerAddress,
-			paymentTxHash: d.paymentTxHash,
-			deploymentTxHash: d.deploymentTxHash,
-			paymentCompleted: d.paymentCompleted,
-			deploymentCompleted: d.deploymentCompleted,
-			fundingRequested: d.fundingRequested,
-			fundingCompleted: d.fundingCompleted,
-			fundingAmount: d.fundingAmount,
-			fundingTxHash: d.fundingTxHash,
-			createdAt: d.createdAt.toISOString(),
-			updatedAt: d.updatedAt.toISOString()
-		}))
+		const sub: typeof master = []
 
-		return { wallets }
+		let masterFound = false
+
+		// Split wallets based on whether they use the master salt
+		for (const d of deployments) {
+			const wallet = {
+				ownerAddress: d.ownerAddress,
+				walletAddress: d.walletAddress,
+				salt: d.salt,
+				payerAddress: d.payerAddress,
+				paymentTxHash: d.paymentTxHash,
+				deploymentTxHash: d.deploymentTxHash,
+				paymentCompleted: d.paymentCompleted,
+				deploymentCompleted: d.deploymentCompleted,
+				fundingRequested: d.fundingRequested,
+				fundingCompleted: d.fundingCompleted,
+				fundingAmount: d.fundingAmount,
+				fundingTxHash: d.fundingTxHash,
+				createdAt: d.createdAt.toISOString(),
+				updatedAt: d.updatedAt.toISOString()
+			}
+
+			if (d.salt === masterSalt) {
+				master.push(wallet)
+				masterFound = true
+			} else {
+				sub.push(wallet)
+			}
+		}
+
+		// If master wallet not in DB, add it with deterministic fields only
+		if (!masterFound) {
+			master.push({
+				ownerAddress: owner.toLowerCase(),
+				walletAddress: masterWalletAddress.toLowerCase(),
+				salt: masterSalt,
+				payerAddress: '',
+				paymentTxHash: '',
+				deploymentTxHash: undefined,
+				paymentCompleted: false,
+				deploymentCompleted: false,
+				fundingRequested: false,
+				fundingCompleted: false,
+				fundingAmount: undefined,
+				fundingTxHash: undefined,
+				createdAt: '', // client can check if empty implies master wallet not deployed
+				updatedAt: ''
+			})
+		}
+
+		return { master, sub }
+	} catch (error) {
+		return handleAndReturnErrorResponse(reply, error)
+	}
+}
+
+/**
+ * Function for route `/wallet/:owner/master`
+ * Get the deterministic master wallet address for a given owner EOA
+ *
+ * @param request
+ * @param reply
+ * @returns
+ */
+export async function getMasterWalletAddress(
+	request: FastifyRequest,
+	reply: FastifyReply
+): Promise<GetMasterWalletAddressResponse> {
+	try {
+		const { owner } = request.params as { owner: string }
+
+		// Validate owner address
+		if (!ethers.isAddress(owner)) {
+			throw new BaseErrors.ERR_INVALID_ADDRESS()
+		}
+
+		// Compute master wallet salt
+		const salt = getMasterWalletSalt(owner)
+
+		// Compute master wallet address
+		const masterWalletAddress = await computeMasterWalletAddress(owner)
+
+		const response: GetMasterWalletAddressResponse = {
+			ownerAddress: owner.toLowerCase(),
+			masterWalletAddress: masterWalletAddress.toLowerCase(),
+			salt: salt.toString()
+		}
+
+		return response
 	} catch (error) {
 		return handleAndReturnErrorResponse(reply, error)
 	}
