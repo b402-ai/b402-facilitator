@@ -58,9 +58,10 @@ const WalletDeploymentSchema = new mongoose.Schema<IWalletDeployment>(
 		},
 		paymentTxHash: {
 			type: String,
-			required: true,
+			required: false,
 			trim: true,
-			lowercase: true
+			lowercase: true,
+			default: ''
 		},
 		deploymentTxHash: {
 			type: String,

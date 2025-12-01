@@ -3,11 +3,11 @@ import { ethers } from 'ethers'
 import { env } from '../schema/env'
 import { BaseErrors } from '../schema/errors'
 import { getMasterWalletCache, setMasterWalletCache } from './masterWalletCache'
+import { encodeNexusAccountCreation } from './nexus'
 
-const SIMPLE_ACCOUNT_FACTORY_ABI = [
-	'function getAddress(address owner, uint256 salt) view returns (address)',
-	'function createAccount(address owner, uint256 salt) returns (address)',
-	'function accountImplementation() view returns (address)'
+const NEXUS_ACCOUNT_FACTORY_ABI = [
+	'function computeAccountAddress(bytes calldata initData, bytes32 salt) view returns (address)',
+	'function createAccount(bytes calldata initData, bytes32 salt) payable returns (address)'
 ]
 
 const SIMPLE_ACCOUNT_ABI = [
@@ -36,11 +36,7 @@ export function getProvider(): ethers.JsonRpcProvider {
 
 export function getFactoryContract(): ethers.Contract {
 	const provider = getProvider()
-	return new ethers.Contract(
-		env.SIMPLE_ACCOUNT_FACTORY_ADDRESS,
-		SIMPLE_ACCOUNT_FACTORY_ABI,
-		provider
-	)
+	return new ethers.Contract(env.NEXUS_ACCOUNT_FACTORY_ADDRESS, NEXUS_ACCOUNT_FACTORY_ABI, provider)
 }
 
 export async function computeWalletAddress(
@@ -51,8 +47,10 @@ export async function computeWalletAddress(
 		throw new BaseErrors.ERR_INVALID_ADDRESS()
 	}
 
+	const initData = encodeNexusAccountCreation(ownerAddress)
+	const saltBytes32 = ethers.zeroPadValue(ethers.toBeHex(BigInt(salt)), 32)
 	const factory = getFactoryContract()
-	const walletAddress = await factory.getFunction('getAddress')(ownerAddress, salt)
+	const walletAddress = await factory.getFunction('computeAccountAddress')(initData, saltBytes32)
 
 	return walletAddress
 }

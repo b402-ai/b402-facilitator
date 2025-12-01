@@ -25,6 +25,7 @@ import type {
 import { env } from '../../schema/env'
 import { BaseErrors, handleAndReturnErrorResponse } from '../../schema/errors'
 import type { BatchCall } from '../../types/wallet'
+import { encodeNexusAccountCreation } from '../../utils/nexus'
 import { getUserOpHash, signUserOp } from '../../utils/paymaster'
 import { getProviderService } from '../../utils/provider'
 import {
@@ -37,6 +38,7 @@ import {
 } from '../../utils/userOp'
 import {
 	computeMasterWalletAddress,
+	computeWalletAddress,
 	getMasterWalletSalt,
 	getTokenAllowance,
 	getTokenBalance,
@@ -486,7 +488,6 @@ export async function verifyDeploymentByEOA(request: FastifyRequest, reply: Fast
 
 		// Get provider and chain ID for signature verification
 		const providerService = getProviderService()
-		const provider = providerService.getProvider()
 		const chainId = providerService.getChainId()
 
 		const domain = {
@@ -546,24 +547,12 @@ export async function verifyDeploymentByEOA(request: FastifyRequest, reply: Fast
 		const payer = feeAuth.from
 
 		// Compute wallet addresses from client-provided salts
-		const factoryInterface = new ethers.Interface([
-			'function getAddress(address owner, uint256 salt) view returns (address)'
-		])
-
 		const wallets: Array<{ address: string; salt: string; owner: string; fundingAmount?: string }> =
 			[]
 
 		for (let i = 0; i < count; i++) {
 			const saltStr = salts[i]
-			const callData = factoryInterface.encodeFunctionData('getAddress', [
-				ownerAddress,
-				BigInt(saltStr)
-			])
-			const result = await provider.call({
-				to: env.SIMPLE_ACCOUNT_FACTORY_ADDRESS,
-				data: callData
-			})
-			const walletAddress = factoryInterface.decodeFunctionResult('getAddress', result)[0]
+			const walletAddress = await computeWalletAddress(ownerAddress, BigInt(saltStr))
 
 			// Validate wallet is not already deployed
 			const exists = await isWalletDeployed(walletAddress)
@@ -843,10 +832,10 @@ export async function settleDeploymentByEOA(request: FastifyRequest, reply: Fast
 
 		// Deploy wallets and track results
 		const createAccountABI = [
-			'function createAccount(address owner, uint256 salt) returns (address)'
+			'function createAccount(bytes calldata initData, bytes32 salt) payable returns (address)'
 		]
 		const factoryWithSigner = new Contract(
-			env.SIMPLE_ACCOUNT_FACTORY_ADDRESS,
+			env.NEXUS_ACCOUNT_FACTORY_ADDRESS,
 			createAccountABI,
 			signer
 		)
@@ -865,13 +854,12 @@ export async function settleDeploymentByEOA(request: FastifyRequest, reply: Fast
 		for (let i = 0; i < wallets.length; i++) {
 			const wallet = wallets[i]
 			try {
-				const deploymentTx = await factoryWithSigner.createAccount(
-					wallet.owner,
-					ethers.toBigInt(wallet.salt),
-					{
-						gasLimit: 500000
-					}
-				)
+				const initData = encodeNexusAccountCreation(wallet.owner)
+				const saltBytes32 = ethers.zeroPadValue(ethers.toBeHex(BigInt(wallet.salt)), 32)
+
+				const deploymentTx = await factoryWithSigner.createAccount(initData, saltBytes32, {
+					gasLimit: 500000
+				})
 				const receipt = await deploymentTx.wait()
 				const deploymentTxHash = receipt?.hash || deploymentTx.hash
 
@@ -882,11 +870,23 @@ export async function settleDeploymentByEOA(request: FastifyRequest, reply: Fast
 					deploymentTxHash
 				})
 			} catch (error) {
-				failedWallets.push({
-					address: wallet.address,
-					salt: wallet.salt,
-					owner: wallet.owner
-				})
+				// Check if wallet was frontrun (deployed by someone else)
+				const exists = await isWalletDeployed(wallet.address)
+				if (exists) {
+					successfulWallets.push({
+						address: wallet.address,
+						salt: wallet.salt,
+						owner: wallet.owner,
+						deploymentTxHash: '' // Empty since we didn't deploy it
+					})
+				} else {
+					// Deployment truly failed
+					failedWallets.push({
+						address: wallet.address,
+						salt: wallet.salt,
+						owner: wallet.owner
+					})
+				}
 				// Continue to next wallet, don't throw and support total failures + partial successes
 				// Note: Failed wallet deployments can be retried via the `/claim` route
 			}
@@ -976,7 +976,7 @@ export async function settleDeploymentByEOA(request: FastifyRequest, reply: Fast
 				}
 			}
 
-			// Batch update funding status for all successful fundings
+			// Update funding status for all successful fundings
 			if (successfulFundings.length > 0) {
 				const fundingBulkOps = successfulFundings.map((funding) => ({
 					updateOne: {
@@ -1071,10 +1071,6 @@ export async function verifyDeploymentBySmartWallet(request: FastifyRequest, rep
 		const provider = providerService.getProvider()
 
 		// Compute wallet addresses from client-provided salts
-		const factoryInterface = new ethers.Interface([
-			'function getAddress(address owner, uint256 salt) view returns (address)'
-		])
-
 		const wallets: Array<{ address: string; salt: string; owner: string; fundingAmount?: string }> =
 			[]
 
@@ -1086,16 +1082,8 @@ export async function verifyDeploymentBySmartWallet(request: FastifyRequest, rep
 		for (let i = 0; i < count; i++) {
 			const saltStr = salts[i]
 
-			// Compute wallet address from salt
-			const callData = factoryInterface.encodeFunctionData('getAddress', [
-				ownerAddress,
-				BigInt(saltStr)
-			])
-			const result = await provider.call({
-				to: env.SIMPLE_ACCOUNT_FACTORY_ADDRESS,
-				data: callData
-			})
-			const computedWalletAddress = factoryInterface.decodeFunctionResult('getAddress', result)[0]
+			// Compute wallet address from salt using Nexus factory
+			const computedWalletAddress = await computeWalletAddress(ownerAddress, BigInt(saltStr))
 
 			// Validate wallet is not already deployed
 			const exists = await isWalletDeployed(computedWalletAddress)
@@ -1439,10 +1427,10 @@ export async function settleDeploymentBySmartWallet(request: FastifyRequest, rep
 
 		// Deploy wallets and track results
 		const createAccountABI = [
-			'function createAccount(address owner, uint256 salt) returns (address)'
+			'function createAccount(bytes calldata initData, bytes32 salt) payable returns (address)'
 		]
 		const factoryWithSigner = new Contract(
-			env.SIMPLE_ACCOUNT_FACTORY_ADDRESS,
+			env.NEXUS_ACCOUNT_FACTORY_ADDRESS,
 			createAccountABI,
 			signer
 		)
@@ -1460,13 +1448,12 @@ export async function settleDeploymentBySmartWallet(request: FastifyRequest, rep
 		for (let i = 0; i < wallets.length; i++) {
 			const wallet = wallets[i]
 			try {
-				const deploymentTx = await factoryWithSigner.createAccount(
-					wallet.owner,
-					ethers.toBigInt(wallet.salt),
-					{
-						gasLimit: 500000
-					}
-				)
+				const initData = encodeNexusAccountCreation(wallet.owner)
+				const saltBytes32 = ethers.zeroPadValue(ethers.toBeHex(BigInt(wallet.salt)), 32)
+
+				const deploymentTx = await factoryWithSigner.createAccount(initData, saltBytes32, {
+					gasLimit: 500000
+				})
 				const receipt = await deploymentTx.wait()
 				const deploymentTxHash = receipt?.hash || deploymentTx.hash
 
@@ -1479,11 +1466,25 @@ export async function settleDeploymentBySmartWallet(request: FastifyRequest, rep
 					fundingCompleted: !!wallet.fundingAmount // Funding already happened atomically via UserOp
 				})
 			} catch (error) {
-				failedWallets.push({
-					address: wallet.address,
-					salt: wallet.salt,
-					owner: wallet.owner
-				})
+				// Check if wallet was frontrun (deployed by someone else)
+				const exists = await isWalletDeployed(wallet.address)
+				if (exists) {
+					deployedWallets.push({
+						address: wallet.address,
+						salt: wallet.salt,
+						owner: wallet.owner,
+						deploymentTxHash: '', // Empty since we didn't deploy it
+						fundingAmount: wallet.fundingAmount,
+						fundingCompleted: !!wallet.fundingAmount // Funding already happened atomically via UserOp
+					})
+				} else {
+					// Deployment truly failed
+					failedWallets.push({
+						address: wallet.address,
+						salt: wallet.salt,
+						owner: wallet.owner
+					})
+				}
 				// Support partial successes, don't throw
 				// Note: Failed wallet deployments can be retried via the `/claim` route
 				// Note: If funding succeeded, the tokens will be accessible once the wallet is successfully deployed
@@ -1735,15 +1736,16 @@ export async function claimWalletDeployment(request: FastifyRequest, reply: Fast
 
 		// Deploy all pending wallets
 		const createAccountABI = [
-			'function createAccount(address owner, uint256 salt) returns (address)'
+			'function createAccount(bytes calldata initData, bytes32 salt) payable returns (address)'
 		]
-		const factory = new Contract(env.SIMPLE_ACCOUNT_FACTORY_ADDRESS, createAccountABI, signer)
+		const factory = new Contract(env.NEXUS_ACCOUNT_FACTORY_ADDRESS, createAccountABI, signer)
 
 		const successfulDeployments: Array<{
 			address: string
 			salt: string
 			owner: string
 			deploymentTxHash: string
+			needsFundingUpdate?: boolean
 		}> = []
 		const failedDeployments: Array<{
 			address: string
@@ -1753,14 +1755,26 @@ export async function claimWalletDeployment(request: FastifyRequest, reply: Fast
 		}> = []
 
 		for (const deployment of deployments) {
+			// Check if wallet already exists (could've been deployed by someone else)
+			const alreadyExists = await isWalletDeployed(deployment.walletAddress)
+			if (alreadyExists) {
+				successfulDeployments.push({
+					address: deployment.walletAddress,
+					salt: deployment.salt,
+					owner: deployment.ownerAddress,
+					deploymentTxHash: '', // Empty since we didn't deploy it
+					needsFundingUpdate: deployment.fundingRequested && !deployment.fundingPaymentData
+				})
+				continue
+			}
+
 			try {
-				const deploymentTx = await factory.createAccount(
-					deployment.ownerAddress,
-					ethers.toBigInt(deployment.salt),
-					{
-						gasLimit: 500000
-					}
-				)
+				const initData = encodeNexusAccountCreation(deployment.ownerAddress)
+				const saltBytes32 = ethers.zeroPadValue(ethers.toBeHex(BigInt(deployment.salt)), 32)
+
+				const deploymentTx = await factory.createAccount(initData, saltBytes32, {
+					gasLimit: 500000
+				})
 				const receipt = await deploymentTx.wait()
 				const deploymentTxHash = receipt?.hash || deploymentTx.hash
 
@@ -1768,32 +1782,55 @@ export async function claimWalletDeployment(request: FastifyRequest, reply: Fast
 					address: deployment.walletAddress,
 					salt: deployment.salt,
 					owner: deployment.ownerAddress,
-					deploymentTxHash
-				})
-
-				// Update this deployment record
-				await deployment.updateOne({
-					deploymentTxHash: deploymentTxHash.toLowerCase(),
-					deploymentCompleted: true,
-					// For smart wallet payments, funding already succeeded atomically
-					// If no `fundingPaymentData` stored, this was a smart wallet payment
-					...(deployment.fundingRequested &&
-						!deployment.fundingPaymentData && {
-							fundingCompleted: true
-						})
+					deploymentTxHash,
+					needsFundingUpdate: deployment.fundingRequested && !deployment.fundingPaymentData
 				})
 			} catch (error) {
-				failedDeployments.push({
-					address: deployment.walletAddress,
-					salt: deployment.salt,
-					owner: deployment.ownerAddress,
-					error: error instanceof Error ? error.message : 'Unknown error'
-				})
-				// Continue to next wallet - support partial success
+				// Check if wallet was frontrun (deployed by someone else)
+				const exists = await isWalletDeployed(deployment.walletAddress)
+				if (exists) {
+					successfulDeployments.push({
+						address: deployment.walletAddress,
+						salt: deployment.salt,
+						owner: deployment.ownerAddress,
+						deploymentTxHash: '', // Empty since we didn't deploy it
+						needsFundingUpdate: deployment.fundingRequested && !deployment.fundingPaymentData
+					})
+				} else {
+					// Deployment truly failed
+					failedDeployments.push({
+						address: deployment.walletAddress,
+						salt: deployment.salt,
+						owner: deployment.ownerAddress,
+						error: error instanceof Error ? error.message : 'Unknown error'
+					})
+				}
+				// Continue to next wallet (support partial success)
 			}
 		}
 
-		// After successful deployments, handle pending fundings (EOA only)
+		// Update all successful deployments
+		if (successfulDeployments.length > 0) {
+			const bulkOps = successfulDeployments.map((deployment) => ({
+				updateOne: {
+					filter: { walletAddress: deployment.address.toLowerCase() },
+					update: {
+						$set: {
+							deploymentTxHash: deployment.deploymentTxHash.toLowerCase() || '',
+							deploymentCompleted: true,
+							...(deployment.needsFundingUpdate && { fundingCompleted: true })
+						}
+					}
+				}
+			}))
+			try {
+				await WalletDeployment.bulkWrite(bulkOps)
+			} catch {
+				// Seeder will update retroactively if DB fails here
+			}
+		}
+
+		// After successful deployments, handle pending fundings (deployments via EOA only)
 		// Query for wallets that are deployed but have pending fundings
 		const fundingQuery: QueryFilter & { fundingRequested: boolean; fundingCompleted: boolean } = {
 			paymentCompleted: true,
@@ -1824,7 +1861,6 @@ export async function claimWalletDeployment(request: FastifyRequest, reply: Fast
 		for (const funding of pendingFundings) {
 			try {
 				if (!funding.fundingPaymentData) {
-					await funding.updateOne({ fundingCompleted: true })
 					successfulFundings.push({
 						address: funding.walletAddress,
 						fundingTxHash: '', // Happened in UserOp
@@ -1857,17 +1893,32 @@ export async function claimWalletDeployment(request: FastifyRequest, reply: Fast
 					fundingTxHash,
 					fundingAmount: authorization.value
 				})
-
-				await funding.updateOne({
-					fundingTxHash: fundingTxHash.toLowerCase(),
-					fundingCompleted: true
-				})
 			} catch (error) {
 				failedFundings.push({
 					address: funding.walletAddress,
 					fundingAmount: funding.fundingAmount,
 					reason: error instanceof Error ? error.message : 'Funding execution failed'
 				})
+			}
+		}
+
+		// Batch update all successful fundings
+		if (successfulFundings.length > 0) {
+			const fundingBulkOps = successfulFundings.map((funding) => ({
+				updateOne: {
+					filter: { walletAddress: funding.address.toLowerCase() },
+					update: {
+						$set: {
+							fundingTxHash: funding.fundingTxHash.toLowerCase() || '',
+							fundingCompleted: true
+						}
+					}
+				}
+			}))
+			try {
+				await WalletDeployment.bulkWrite(fundingBulkOps)
+			} catch {
+				// Seeder will update retroactively if DB fails here
 			}
 		}
 

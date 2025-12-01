@@ -1,6 +1,8 @@
 import 'dotenv/config'
 import { Contract, ethers } from 'ethers'
 
+import { encodeNexusAccountCreation } from '../src/utils/nexus'
+
 // ------------ Config (edit this) ------------
 const API_URL = 'http://localhost:3402'
 const PAYER_PRIVATE_KEY = '' // EOA payer private key (required for both, EOA and smart wallet payment flows)
@@ -35,7 +37,9 @@ const ERC20_ABI = [
 	'function symbol() view returns (string)'
 ]
 
-const FACTORY_ABI = ['function getAddress(address owner, uint256 salt) view returns (address)']
+const FACTORY_ABI = [
+	'function computeAccountAddress(bytes calldata initData, bytes32 salt) view returns (address)'
+]
 
 interface PaymentPayload {
 	token: string
@@ -67,7 +71,10 @@ async function computeWalletAddress(
 	const provider = new ethers.JsonRpcProvider(rpcUrl)
 	const factory = new Contract(factoryAddress, FACTORY_ABI, provider)
 
-	const walletAddress = await factory.getFunction('getAddress')(ownerAddress, BigInt(salt))
+	const initData = encodeNexusAccountCreation(ownerAddress)
+	const saltBytes32 = ethers.zeroPadValue(ethers.toBeHex(BigInt(salt)), 32)
+
+	const walletAddress = await factory.getFunction('computeAccountAddress')(initData, saltBytes32)
 	return walletAddress
 }
 
@@ -175,12 +182,12 @@ async function testEOAPayment() {
 
 	const rpcUrl = process.env.BSC_RPC_URL
 	const relayerAddress = process.env.B402_RELAYER_ADDRESS
-	const factoryAddress = process.env.SIMPLE_ACCOUNT_FACTORY_ADDRESS
+	const factoryAddress = process.env.NEXUS_ACCOUNT_FACTORY_ADDRESS
 	const feeRecipient = process.env.WALLET_FEE_RECIPIENT
 
 	if (!rpcUrl) throw new Error('BSC_RPC_URL not set')
 	if (!relayerAddress) throw new Error('B402_RELAYER_ADDRESS not set')
-	if (!factoryAddress) throw new Error('SIMPLE_ACCOUNT_FACTORY_ADDRESS not set')
+	if (!factoryAddress) throw new Error('NEXUS_ACCOUNT_FACTORY_ADDRESS not set')
 	if (!feeRecipient) throw new Error('WALLET_FEE_RECIPIENT not set')
 
 	const wallet = new ethers.Wallet(PAYER_PRIVATE_KEY)
@@ -332,13 +339,13 @@ async function testSmartWalletPayment() {
 
 	const rpcUrl = process.env.BSC_RPC_URL
 	const relayerAddress = process.env.B402_RELAYER_ADDRESS
-	const factoryAddress = process.env.SIMPLE_ACCOUNT_FACTORY_ADDRESS
+	const factoryAddress = process.env.NEXUS_ACCOUNT_FACTORY_ADDRESS
 	const entryPointAddress = process.env.ENTRY_POINT_ADDRESS
 	const feeRecipient = process.env.WALLET_FEE_RECIPIENT
 
 	if (!rpcUrl) throw new Error('BSC_RPC_URL not set')
 	if (!relayerAddress) throw new Error('B402_RELAYER_ADDRESS not set')
-	if (!factoryAddress) throw new Error('SIMPLE_ACCOUNT_FACTORY_ADDRESS not set')
+	if (!factoryAddress) throw new Error('NEXUS_ACCOUNT_FACTORY_ADDRESS not set')
 	if (!entryPointAddress) throw new Error('ENTRY_POINT_ADDRESS not set')
 	if (!feeRecipient) throw new Error('WALLET_FEE_RECIPIENT not set')
 

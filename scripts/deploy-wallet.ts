@@ -2,6 +2,7 @@ import 'dotenv/config'
 import { Contract, Wallet, ethers } from 'ethers'
 
 import { env } from '../src/schema/env'
+import { createNexusInitData } from '../src/utils/nexus'
 
 interface DeploymentConfig {
 	ownerPrivateKey: string
@@ -15,9 +16,9 @@ const DEPLOYMENT_CONFIG: DeploymentConfig = {
 }
 // --------------------------------------------
 
-const SIMPLE_ACCOUNT_FACTORY_ABI = [
-	'function createAccount(address owner, uint256 salt) external returns (address)',
-	'function getAddress(address owner, uint256 salt) external view returns (address)'
+const NEXUS_ACCOUNT_FACTORY_ABI = [
+	'function createAccount(bytes calldata initData, bytes32 salt) payable returns (address)',
+	'function computeAccountAddress(bytes calldata initData, bytes32 salt) view returns (address)'
 ]
 
 async function deployWallet(config: DeploymentConfig) {
@@ -30,13 +31,18 @@ async function deployWallet(config: DeploymentConfig) {
 	const ownerWallet = new Wallet(ownerPrivateKey, provider)
 
 	const factory = new Contract(
-		env.SIMPLE_ACCOUNT_FACTORY_ADDRESS,
-		SIMPLE_ACCOUNT_FACTORY_ABI,
+		env.NEXUS_ACCOUNT_FACTORY_ADDRESS,
+		NEXUS_ACCOUNT_FACTORY_ABI,
 		provider
 	)
 
-	const getAddressFunc = factory.getFunction('getAddress')
-	const walletAddress: string = await getAddressFunc(ownerWallet.address, salt)
+	// Create Nexus initData with K1Validator
+	const initData = createNexusInitData(ownerWallet.address)
+	// Convert salt to bytes32
+	const saltBytes32 = ethers.zeroPadValue(ethers.toBeHex(BigInt(salt)), 32)
+
+	const computeAddressFunc = factory.getFunction('computeAccountAddress')
+	const walletAddress: string = await computeAddressFunc(initData, saltBytes32)
 	console.log(`Wallet address: ${walletAddress}`)
 
 	const code = await provider.getCode(walletAddress)
@@ -55,13 +61,13 @@ async function deployWallet(config: DeploymentConfig) {
 	const tx: ethers.ContractTransactionResponse = await (
 		factoryWithSigner as unknown as {
 			createAccount: (
-				owner: string,
-				salt: number,
+				initData: string,
+				salt: string,
 				options: object
 			) => Promise<ethers.ContractTransactionResponse>
 		}
-	).createAccount(ownerWallet.address, salt, {
-		gasLimit: 250000,
+	).createAccount(initData, saltBytes32, {
+		gasLimit: 500000,
 		gasPrice: networkGasPrice
 	})
 
