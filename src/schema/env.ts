@@ -18,7 +18,6 @@ interface IEnvSchema {
 	B402_RELAYER_ADDRESS: string
 
 	// ERC-4337 Smart Wallet Configuration
-	SIMPLE_ACCOUNT_FACTORY_ADDRESS: string
 	ENTRY_POINT_ADDRESS: string
 	BUNDLER_RPC_URL: string
 	PAYMASTER_ADDRESS: string
@@ -26,6 +25,12 @@ interface IEnvSchema {
 	WALLET_PAYMENT_FEE: string
 	WALLET_DEPLOYMENT_FEE: string
 	WALLET_FEE_RECIPIENT: string
+
+	// Nexus Smart Account Configuration (ERC-7579)
+	NEXUS_ACCOUNT_FACTORY_ADDRESS: string
+	NEXUS_BOOTSTRAP_ADDRESS: string
+	K1_VALIDATOR_ADDRESS: string
+	// Note: Smart Sessions can be added later via installModule when address is available
 
 	// Admin API secret for bypassing rate limits
 	ADMIN_API_SECRET?: string
@@ -45,14 +50,16 @@ export const envSchema: JSONSchemaType<IEnvSchema> = {
 	required: [
 		'RELAYER_PRIVATE_KEY',
 		'B402_RELAYER_ADDRESS',
-		'SIMPLE_ACCOUNT_FACTORY_ADDRESS',
 		'ENTRY_POINT_ADDRESS',
 		'BUNDLER_RPC_URL',
 		'PAYMASTER_ADDRESS',
 		'PAYMASTER_SIGNER_KEY',
 		'WALLET_PAYMENT_FEE',
 		'WALLET_DEPLOYMENT_FEE',
-		'WALLET_FEE_RECIPIENT'
+		'WALLET_FEE_RECIPIENT',
+		'NEXUS_ACCOUNT_FACTORY_ADDRESS',
+		'NEXUS_BOOTSTRAP_ADDRESS',
+		'K1_VALIDATOR_ADDRESS'
 	],
 	properties: {
 		SERVER_PORT: { type: 'string', default: '3402' },
@@ -69,7 +76,6 @@ export const envSchema: JSONSchemaType<IEnvSchema> = {
 		RELAYER_PRIVATE_KEY: { type: 'string' },
 		B402_RELAYER_ADDRESS: { type: 'string' },
 
-		SIMPLE_ACCOUNT_FACTORY_ADDRESS: { type: 'string' },
 		ENTRY_POINT_ADDRESS: { type: 'string' },
 		BUNDLER_RPC_URL: { type: 'string' },
 		PAYMASTER_ADDRESS: { type: 'string' },
@@ -77,6 +83,10 @@ export const envSchema: JSONSchemaType<IEnvSchema> = {
 		WALLET_PAYMENT_FEE: { type: 'string' },
 		WALLET_DEPLOYMENT_FEE: { type: 'string' },
 		WALLET_FEE_RECIPIENT: { type: 'string' },
+
+		NEXUS_ACCOUNT_FACTORY_ADDRESS: { type: 'string' },
+		NEXUS_BOOTSTRAP_ADDRESS: { type: 'string' },
+		K1_VALIDATOR_ADDRESS: { type: 'string' },
 
 		ADMIN_API_SECRET: { type: 'string', nullable: true },
 
@@ -92,14 +102,16 @@ function getEnv(): IEnvSchema {
 	const required = [
 		'RELAYER_PRIVATE_KEY',
 		'B402_RELAYER_ADDRESS',
-		'SIMPLE_ACCOUNT_FACTORY_ADDRESS',
 		'ENTRY_POINT_ADDRESS',
 		'BUNDLER_RPC_URL',
 		'PAYMASTER_ADDRESS',
 		'PAYMASTER_SIGNER_KEY',
 		'WALLET_PAYMENT_FEE',
 		'WALLET_DEPLOYMENT_FEE',
-		'WALLET_FEE_RECIPIENT'
+		'WALLET_FEE_RECIPIENT',
+		'NEXUS_ACCOUNT_FACTORY_ADDRESS',
+		'NEXUS_BOOTSTRAP_ADDRESS',
+		'K1_VALIDATOR_ADDRESS'
 	]
 
 	const missing = required.filter((key) => !process.env[key])
@@ -116,7 +128,6 @@ function getEnv(): IEnvSchema {
 		NETWORK: process.env.NETWORK || 'testnet',
 		RELAYER_PRIVATE_KEY: process.env.RELAYER_PRIVATE_KEY as string,
 		B402_RELAYER_ADDRESS: process.env.B402_RELAYER_ADDRESS as string,
-		SIMPLE_ACCOUNT_FACTORY_ADDRESS: process.env.SIMPLE_ACCOUNT_FACTORY_ADDRESS as string,
 		ENTRY_POINT_ADDRESS: process.env.ENTRY_POINT_ADDRESS as string,
 		BUNDLER_RPC_URL: process.env.BUNDLER_RPC_URL as string,
 		PAYMASTER_ADDRESS: process.env.PAYMASTER_ADDRESS as string,
@@ -124,6 +135,9 @@ function getEnv(): IEnvSchema {
 		WALLET_PAYMENT_FEE: process.env.WALLET_PAYMENT_FEE as string,
 		WALLET_DEPLOYMENT_FEE: process.env.WALLET_DEPLOYMENT_FEE as string,
 		WALLET_FEE_RECIPIENT: process.env.WALLET_FEE_RECIPIENT as string,
+		NEXUS_ACCOUNT_FACTORY_ADDRESS: process.env.NEXUS_ACCOUNT_FACTORY_ADDRESS as string,
+		NEXUS_BOOTSTRAP_ADDRESS: process.env.NEXUS_BOOTSTRAP_ADDRESS as string,
+		K1_VALIDATOR_ADDRESS: process.env.K1_VALIDATOR_ADDRESS as string,
 		ADMIN_API_SECRET: process.env.ADMIN_API_SECRET,
 		DATABASE_URL: process.env.DATABASE_URL
 	}
