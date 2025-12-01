@@ -3,7 +3,7 @@ import { ethers } from 'ethers'
 import { env } from '../schema/env'
 import { BaseErrors } from '../schema/errors'
 import { getMasterWalletCache, setMasterWalletCache } from './masterWalletCache'
-import { createNexusInitData } from './nexus'
+import { encodeNexusAccountCreation } from './nexus'
 
 const NEXUS_ACCOUNT_FACTORY_ABI = [
 	'function computeAccountAddress(bytes calldata initData, bytes32 salt) view returns (address)',
@@ -47,7 +47,7 @@ export async function computeWalletAddress(
 		throw new BaseErrors.ERR_INVALID_ADDRESS()
 	}
 
-	const initData = createNexusInitData(ownerAddress)
+	const initData = encodeNexusAccountCreation(ownerAddress)
 	const saltBytes32 = ethers.zeroPadValue(ethers.toBeHex(BigInt(salt)), 32)
 	const factory = getFactoryContract()
 	const walletAddress = await factory.getFunction('computeAccountAddress')(initData, saltBytes32)

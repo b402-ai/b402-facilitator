@@ -25,7 +25,7 @@ import type {
 import { env } from '../../schema/env'
 import { BaseErrors, handleAndReturnErrorResponse } from '../../schema/errors'
 import type { BatchCall } from '../../types/wallet'
-import { createNexusInitData } from '../../utils/nexus'
+import { encodeNexusAccountCreation } from '../../utils/nexus'
 import { getUserOpHash, signUserOp } from '../../utils/paymaster'
 import { getProviderService } from '../../utils/provider'
 import {
@@ -854,7 +854,7 @@ export async function settleDeploymentByEOA(request: FastifyRequest, reply: Fast
 		for (let i = 0; i < wallets.length; i++) {
 			const wallet = wallets[i]
 			try {
-				const initData = createNexusInitData(wallet.owner)
+				const initData = encodeNexusAccountCreation(wallet.owner)
 				const saltBytes32 = ethers.zeroPadValue(ethers.toBeHex(BigInt(wallet.salt)), 32)
 
 				const deploymentTx = await factoryWithSigner.createAccount(initData, saltBytes32, {
@@ -1448,7 +1448,7 @@ export async function settleDeploymentBySmartWallet(request: FastifyRequest, rep
 		for (let i = 0; i < wallets.length; i++) {
 			const wallet = wallets[i]
 			try {
-				const initData = createNexusInitData(wallet.owner)
+				const initData = encodeNexusAccountCreation(wallet.owner)
 				const saltBytes32 = ethers.zeroPadValue(ethers.toBeHex(BigInt(wallet.salt)), 32)
 
 				const deploymentTx = await factoryWithSigner.createAccount(initData, saltBytes32, {
@@ -1769,7 +1769,7 @@ export async function claimWalletDeployment(request: FastifyRequest, reply: Fast
 			}
 
 			try {
-				const initData = createNexusInitData(deployment.ownerAddress)
+				const initData = encodeNexusAccountCreation(deployment.ownerAddress)
 				const saltBytes32 = ethers.zeroPadValue(ethers.toBeHex(BigInt(deployment.salt)), 32)
 
 				const deploymentTx = await factory.createAccount(initData, saltBytes32, {
