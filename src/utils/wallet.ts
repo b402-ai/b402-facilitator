@@ -10,8 +10,6 @@ const NEXUS_ACCOUNT_FACTORY_ABI = [
 	'function createAccount(bytes calldata initData, bytes32 salt) payable returns (address)'
 ]
 
-// Note: Nexus accounts don't have getNonce() - nonce comes from EntryPoint
-
 const ERC20_ABI = [
 	'function balanceOf(address account) view returns (uint256)',
 	'function allowance(address owner, address spender) view returns (uint256)',
@@ -119,11 +117,9 @@ export async function getWalletNonce(address: string): Promise<number> {
 
 	const provider = getProvider()
 
-	// For ERC-4337 accounts, get nonce from EntryPoint, not wallet directly
-	// EntryPoint.getNonce(address sender, uint192 key) - key=0 for default nonce
 	const entryPointABI = ['function getNonce(address sender, uint192 key) view returns (uint256)']
 	const entryPoint = new ethers.Contract(env.ENTRY_POINT_ADDRESS, entryPointABI, provider)
-	const nonce = await entryPoint.getNonce(address, 0)
+	const nonce = await entryPoint.getNonce(address, 0) // 0 for default nonce
 
 	return Number(nonce)
 }

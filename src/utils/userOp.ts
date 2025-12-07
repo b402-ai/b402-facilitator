@@ -7,7 +7,7 @@ import { BaseErrors } from '../schema/errors'
 import type { BatchCall } from '../types/wallet'
 import { getProvider, getTokenAllowance, getWalletNonce, isWalletDeployed } from './wallet'
 
-// ERC-7579 Nexus account ABI (modular smart account)
+// ERC-7579 Nexus account ABI
 const NEXUS_ACCOUNT_ABI = [
 	'function execute(bytes32 mode, bytes calldata executionCalldata)',
 	'function executeFromExecutor(bytes32 mode, bytes calldata executionCalldata) returns (bytes[] memory returnData)'
@@ -31,25 +31,14 @@ function encodeApprove(spender: string, amount: bigint): string {
 	return iface.encodeFunctionData('approve', [spender, amount])
 }
 
-/**
- * Build ERC-7579 execution mode bytes32
- * Mode: [1 byte callType][1 byte execType][4 bytes unused][4 bytes modeSelector][22 bytes modePayload]
- * Total: 32 bytes
- */
 function buildERC7579Mode(callType: string, execType: string = EXECTYPE_DEFAULT): string {
-	// callType and execType are '0x00' or '0x01' format, need to extract the byte part
 	const callTypeByte = callType.slice(2) // Remove '0x' -> '00' or '01'
 	const execTypeByte = execType.slice(2) // Remove '0x' -> '00' or '01'
 
-	// Build full 32-byte hex: callType(1) + execType(1) + unused(4) + selector(4) + payload(22) = 32 bytes
-	// In hex: 2 + 2 + 8 + 8 + 44 = 64 chars
+	// callType(1) + execType(1) + unused(4) + selector(4) + payload(22) = 32 bytes
 	return '0x' + callTypeByte + execTypeByte + '00'.repeat(30)
 }
 
-/**
- * Encode execution data for ERC-7579 batch call
- * Format: abi.encode(Execution[]) where Execution = (address target, uint256 value, bytes callData)
- */
 function encodeBatchExecutionData(calls: BatchCall[]): string {
 	// Each execution is a tuple: (address, uint256, bytes)
 	const executions = calls.map((c) => ({
@@ -64,10 +53,6 @@ function encodeBatchExecutionData(calls: BatchCall[]): string {
 	)
 }
 
-/**
- * Encode calls for Nexus ERC-7579 execute function
- * Uses: execute(bytes32 mode, bytes executionCalldata)
- */
 export function encodeExecuteBatch(calls: BatchCall[]): string {
 	const iface = new ethers.Interface(NEXUS_ACCOUNT_ABI)
 
@@ -88,9 +73,6 @@ export function encodeExecuteBatch(calls: BatchCall[]): string {
 	}
 }
 
-/**
- * Decode ERC-7579 execute calldata back to BatchCall array
- */
 export function decodeExecuteBatch(callData: string): BatchCall[] {
 	const iface = new ethers.Interface(NEXUS_ACCOUNT_ABI)
 	const decoded = iface.decodeFunctionData('execute', callData)
@@ -98,11 +80,10 @@ export function decodeExecuteBatch(callData: string): BatchCall[] {
 	const mode = decoded[0] as string
 	const executionData = decoded[1] as string
 
-	// Check call type from first byte of mode
 	const callType = mode.slice(0, 4) // '0x00' or '0x01'
 
 	if (callType === '0x00') {
-		// Single call - decode packed data
+		// Single call
 		// abi.encodePacked(target, value, callData) = 20 bytes + 32 bytes + variable
 		const target = '0x' + executionData.slice(2, 42)
 		const value = BigInt('0x' + executionData.slice(42, 106))
@@ -116,7 +97,7 @@ export function decodeExecuteBatch(callData: string): BatchCall[] {
 			}
 		]
 	} else {
-		// Batch call - decode ABI encoded array
+		// Batch call
 		const [executions] = ethers.AbiCoder.defaultAbiCoder().decode(
 			['tuple(address target, uint256 value, bytes callData)[]'],
 			executionData
