@@ -1722,10 +1722,6 @@ export async function claimWalletDeployment(request: FastifyRequest, reply: Fast
 
 		const deployments = await WalletDeployment.find(query)
 
-		if (deployments.length === 0) {
-			throw new BaseErrors.ERR_NO_PENDING_DEPLOYMENTS()
-		}
-
 		// Get provider
 		const providerService = getProviderService()
 		const provider = providerService.getProvider()
@@ -1734,12 +1730,7 @@ export async function claimWalletDeployment(request: FastifyRequest, reply: Fast
 		const relayerWallet = new Wallet(request.server.config.RELAYER_PRIVATE_KEY)
 		const signer = relayerWallet.connect(provider)
 
-		// Deploy all pending wallets
-		const createAccountABI = [
-			'function createAccount(bytes calldata initData, bytes32 salt) payable returns (address)'
-		]
-		const factory = new Contract(env.NEXUS_ACCOUNT_FACTORY_ADDRESS, createAccountABI, signer)
-
+		// Initialize result arrays
 		const successfulDeployments: Array<{
 			address: string
 			salt: string
@@ -1754,41 +1745,17 @@ export async function claimWalletDeployment(request: FastifyRequest, reply: Fast
 			error: string
 		}> = []
 
-		for (const deployment of deployments) {
-			// Check if wallet already exists (could've been deployed by someone else)
-			const alreadyExists = await isWalletDeployed(deployment.walletAddress)
-			if (alreadyExists) {
-				successfulDeployments.push({
-					address: deployment.walletAddress,
-					salt: deployment.salt,
-					owner: deployment.ownerAddress,
-					deploymentTxHash: '', // Empty since we didn't deploy it
-					needsFundingUpdate: deployment.fundingRequested && !deployment.fundingPaymentData
-				})
-				continue
-			}
+		// Deploy all pending wallets (if any)
+		if (deployments.length > 0) {
+			const createAccountABI = [
+				'function createAccount(bytes calldata initData, bytes32 salt) payable returns (address)'
+			]
+			const factory = new Contract(env.NEXUS_ACCOUNT_FACTORY_ADDRESS, createAccountABI, signer)
 
-			try {
-				const initData = encodeNexusAccountCreation(deployment.ownerAddress)
-				const saltBytes32 = ethers.zeroPadValue(ethers.toBeHex(BigInt(deployment.salt)), 32)
-
-				const deploymentTx = await factory.createAccount(initData, saltBytes32, {
-					gasLimit: 500000
-				})
-				const receipt = await deploymentTx.wait()
-				const deploymentTxHash = receipt?.hash || deploymentTx.hash
-
-				successfulDeployments.push({
-					address: deployment.walletAddress,
-					salt: deployment.salt,
-					owner: deployment.ownerAddress,
-					deploymentTxHash,
-					needsFundingUpdate: deployment.fundingRequested && !deployment.fundingPaymentData
-				})
-			} catch (error) {
-				// Check if wallet was frontrun (deployed by someone else)
-				const exists = await isWalletDeployed(deployment.walletAddress)
-				if (exists) {
+			for (const deployment of deployments) {
+				// Check if wallet already exists (could've been deployed by someone else)
+				const alreadyExists = await isWalletDeployed(deployment.walletAddress)
+				if (alreadyExists) {
 					successfulDeployments.push({
 						address: deployment.walletAddress,
 						salt: deployment.salt,
@@ -1796,37 +1763,69 @@ export async function claimWalletDeployment(request: FastifyRequest, reply: Fast
 						deploymentTxHash: '', // Empty since we didn't deploy it
 						needsFundingUpdate: deployment.fundingRequested && !deployment.fundingPaymentData
 					})
-				} else {
-					// Deployment truly failed
-					failedDeployments.push({
+					continue
+				}
+
+				try {
+					const initData = encodeNexusAccountCreation(deployment.ownerAddress)
+					const saltBytes32 = ethers.zeroPadValue(ethers.toBeHex(BigInt(deployment.salt)), 32)
+
+					const deploymentTx = await factory.createAccount(initData, saltBytes32, {
+						gasLimit: 500000
+					})
+					const receipt = await deploymentTx.wait()
+					const deploymentTxHash = receipt?.hash || deploymentTx.hash
+
+					successfulDeployments.push({
 						address: deployment.walletAddress,
 						salt: deployment.salt,
 						owner: deployment.ownerAddress,
-						error: error instanceof Error ? error.message : 'Unknown error'
+						deploymentTxHash,
+						needsFundingUpdate: deployment.fundingRequested && !deployment.fundingPaymentData
 					})
+				} catch (error) {
+					// Check if wallet was frontrun (deployed by someone else)
+					const exists = await isWalletDeployed(deployment.walletAddress)
+					if (exists) {
+						successfulDeployments.push({
+							address: deployment.walletAddress,
+							salt: deployment.salt,
+							owner: deployment.ownerAddress,
+							deploymentTxHash: '', // Empty since we didn't deploy it
+							needsFundingUpdate: deployment.fundingRequested && !deployment.fundingPaymentData
+						})
+					} else {
+						// Deployment truly failed
+						failedDeployments.push({
+							address: deployment.walletAddress,
+							salt: deployment.salt,
+							owner: deployment.ownerAddress,
+							error: error instanceof Error ? error.message : 'Unknown error'
+						})
+					}
+					// Continue to next wallet (support partial success)
 				}
-				// Continue to next wallet (support partial success)
 			}
-		}
 
-		// Update all successful deployments
-		if (successfulDeployments.length > 0) {
-			const bulkOps = successfulDeployments.map((deployment) => ({
-				updateOne: {
-					filter: { walletAddress: deployment.address.toLowerCase() },
-					update: {
-						$set: {
-							deploymentTxHash: deployment.deploymentTxHash.toLowerCase() || '',
-							deploymentCompleted: true,
-							...(deployment.needsFundingUpdate && { fundingCompleted: true })
+			// Update all successful deployments
+			if (successfulDeployments.length > 0) {
+				const bulkOps = successfulDeployments.map((deployment) => ({
+					updateOne: {
+						filter: { walletAddress: deployment.address.toLowerCase() },
+						update: {
+							$set: {
+								deploymentTxHash: deployment.deploymentTxHash.toLowerCase() || '',
+								deploymentCompleted: true,
+								...(deployment.needsFundingUpdate && { fundingCompleted: true })
+							}
 						}
 					}
+				}))
+				try {
+					await WalletDeployment.bulkWrite(bulkOps)
+				} catch {
+					// Seeder will update retroactively if DB fails here
 				}
-			}))
-			try {
-				await WalletDeployment.bulkWrite(bulkOps)
-			} catch {
-				// Seeder will update retroactively if DB fails here
 			}
 		}
 
@@ -1922,9 +1921,14 @@ export async function claimWalletDeployment(request: FastifyRequest, reply: Fast
 			}
 		}
 
+		// Validate that at least one type of pending work was found
+		if (deployments.length === 0 && pendingFundings.length === 0) {
+			throw new BaseErrors.ERR_NO_PENDING_DEPLOYMENTS()
+		}
+
 		const network = providerService.getNetwork()
 		const response = {
-			success: successfulDeployments.length > 0,
+			success: successfulDeployments.length > 0 || successfulFundings.length > 0,
 			deployments: {
 				successful: successfulDeployments,
 				failed: failedDeployments
