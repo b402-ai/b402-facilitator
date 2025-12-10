@@ -5,7 +5,6 @@ import {
 	TXIDVersion
 } from '@railgun-community/shared-models'
 import {
-	ArtifactStore,
 	createRailgunWallet,
 	loadProvider,
 	populateShield,
@@ -13,8 +12,16 @@ import {
 	stopRailgunEngine
 } from '@railgun-community/wallet'
 import 'dotenv/config'
-import { Contract, Mnemonic, Wallet, ethers } from 'ethers'
+import { Contract, Wallet, ethers } from 'ethers'
 import { MemoryLevel } from 'memory-level'
+
+import { getPrivacyBalance } from './utils/balance'
+import {
+	ERC20_ABI,
+	createInMemoryArtifactStore,
+	deriveMnemonicFromEOA,
+	getShieldPrivateKey
+} from './utils/railgun'
 
 interface ShieldConfig {
 	eoaPrivateKey: string
@@ -25,6 +32,7 @@ interface ShieldConfig {
 	amount: bigint
 	railgunSmartWalletAddress: string
 	rpcUrl: string
+	apiUrl: string // B402 Backend API URL for privacy operations
 	gasLimit?: bigint
 	gasPrice?: bigint
 }
@@ -39,17 +47,10 @@ const CONFIG: ShieldConfig = {
 	amount: ethers.parseUnits('0.01', 18),
 	railgunSmartWalletAddress: '0x590162bf4b50f6576a459b75309ee21d92178a10',
 	rpcUrl: process.env.BSC_RPC_URL || '',
+	apiUrl: 'http://localhost:3000', // B402 Backend API URL (edit this)
 	gasLimit: 500000n
 }
 // ---------------------------
-const B402_RESERVED_ZK_MESSAGE = 'b402 Reserved Railgun zk-Address'
-const ERC20_ABI = [
-	'function approve(address spender, uint256 amount) external returns (bool)',
-	'function allowance(address owner, address spender) external view returns (uint256)',
-	'function balanceOf(address account) external view returns (uint256)',
-	'function decimals() external view returns (uint8)',
-	'function symbol() external view returns (string)'
-] as const
 
 async function shieldTokens(config: ShieldConfig) {
 	if (!config.eoaPrivateKey || config.eoaPrivateKey === '') {
@@ -61,9 +62,27 @@ async function shieldTokens(config: ShieldConfig) {
 	if (!config.railgunSmartWalletAddress) {
 		throw new Error('Railgun Smart Wallet address not configured')
 	}
+	if (!config.apiUrl || config.apiUrl === '') {
+		throw new Error('API URL not configured')
+	}
 
 	const provider = new ethers.JsonRpcProvider(config.rpcUrl)
 	const eoaWallet = new Wallet(config.eoaPrivateKey, provider)
+
+	// Check balance BEFORE shielding
+	console.log('\n=== BALANCE BEFORE SHIELDING ===')
+	try {
+		const balanceBefore = await getPrivacyBalance({
+			eoaPrivateKey: config.eoaPrivateKey,
+			rpcUrl: config.rpcUrl,
+			apiUrl: config.apiUrl,
+			tokenAddresses: [config.token.address]
+		})
+		console.log(balanceBefore.summary)
+	} catch (error) {
+		console.warn('Could not fetch balance before shielding:', error)
+		console.log('Continuing with shield operation...\n')
+	}
 
 	const db = new MemoryLevel()
 	const artifactStore = createInMemoryArtifactStore()
@@ -75,7 +94,7 @@ async function shieldTokens(config: ShieldConfig) {
 		false,
 		artifactStore,
 		false,
-		false,
+		true, // skipMerkletreeScans
 		['https://ppoi-agg.horsewithsixlegs.xyz'],
 		[],
 		false
@@ -188,13 +207,32 @@ async function shieldTokens(config: ShieldConfig) {
 
 	await stopRailgunEngine()
 
-	return {
+	const result = {
 		txHash: tx.hash,
 		blockNumber: receipt.blockNumber,
 		gasUsed: receipt.gasUsed.toString(),
 		railgunAddress: walletInfo.railgunAddress,
 		mnemonic: mnemonic
 	}
+
+	// Check balance AFTER shielding
+	console.log('\n=== BALANCE AFTER SHIELDING ===')
+	console.log('Waiting 10 seconds for indexer to sync...')
+	await new Promise((resolve) => setTimeout(resolve, 10000))
+
+	try {
+		const balanceAfter = await getPrivacyBalance({
+			eoaPrivateKey: config.eoaPrivateKey,
+			rpcUrl: config.rpcUrl,
+			apiUrl: config.apiUrl,
+			tokenAddresses: [config.token.address]
+		})
+		console.log(balanceAfter.summary)
+	} catch (error) {
+		console.warn('Could not fetch balance after shielding:', error)
+	}
+
+	return result
 }
 
 shieldTokens(CONFIG)
@@ -208,40 +246,3 @@ shieldTokens(CONFIG)
 		console.error('Error: ', error.message)
 		stopRailgunEngine().finally(() => process.exit(1))
 	})
-
-// ---  Helper functions ---
-
-async function deriveMnemonicFromEOA(eoaPrivateKey: string): Promise<string> {
-	const wallet = new ethers.Wallet(eoaPrivateKey)
-	const message = B402_RESERVED_ZK_MESSAGE
-	const signature = await wallet.signMessage(message)
-	const entropy = ethers.keccak256(signature).slice(0, 34)
-	const mnemonic = Mnemonic.fromEntropy(entropy)
-	return mnemonic.phrase
-}
-
-function getShieldPrivateKey(): string {
-	return ethers.hexlify(ethers.randomBytes(32))
-}
-
-function createInMemoryArtifactStore(): ArtifactStore {
-	const storage = new Map<string, string | Buffer>()
-
-	return new ArtifactStore(
-		async (path: string) => {
-			const item = storage.get(path)
-			if (!item) {
-				throw new Error(`Artifact not found: ${path}`)
-			}
-			return item
-		},
-		async (_dir: string, path: string, item: string | Uint8Array) => {
-			// Convert Uint8Array to Buffer for storage
-			const storageItem = typeof item === 'string' ? item : Buffer.from(item)
-			storage.set(path, storageItem)
-		},
-		async (path: string) => {
-			return storage.has(path)
-		}
-	)
-}

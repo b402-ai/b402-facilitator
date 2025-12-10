@@ -759,6 +759,8 @@ export async function settleDeploymentByEOA(request: FastifyRequest, reply: Fast
 						paymentTxHash: '', // Will be set after payment confirmation
 						paymentCompleted: false, // Will be set to true after payment confirmation
 						deploymentCompleted: false,
+						feePaymentToken: feePayment.token.toLowerCase(),
+						fundingToken: fundingPayment?.token.toLowerCase(),
 						fundingAmount: wallet.fundingAmount,
 						fundingRequested: !!wallet.fundingAmount,
 						fundingCompleted: false,
@@ -1074,9 +1076,14 @@ export async function verifyDeploymentBySmartWallet(request: FastifyRequest, rep
 		const wallets: Array<{ address: string; salt: string; owner: string; fundingAmount?: string }> =
 			[]
 
-		// Determine which token to use - default to first supported token (USDT)
-		const token = Object.values(SUPPORTED_TOKENS)[0].address
-		const tokenConfig = Object.values(SUPPORTED_TOKENS)[0]
+		// Get token from request and validate
+		const token = paymentRequirements.deployment.token
+		const tokenConfig = Object.values(SUPPORTED_TOKENS).find(
+			(t) => t.address.toLowerCase() === token.toLowerCase()
+		)
+		if (!tokenConfig) {
+			throw new BaseErrors.ERR_UNSUPPORTED_TOKEN()
+		}
 
 		const fundingAmounts: string[] = []
 		for (let i = 0; i < count; i++) {
@@ -1348,6 +1355,8 @@ export async function settleDeploymentBySmartWallet(request: FastifyRequest, rep
 					paymentTxHash: '', // Will be set after confirmation
 					paymentCompleted: false, // Will be set to true after confirmation
 					deploymentCompleted: false,
+					feePaymentToken: token.toLowerCase(),
+					fundingToken: wallet.fundingAmount ? token.toLowerCase() : undefined,
 					fundingAmount: wallet.fundingAmount,
 					fundingRequested: !!wallet.fundingAmount,
 					fundingCompleted: false,
@@ -1568,6 +1577,8 @@ export async function getWalletsByOwner(request: FastifyRequest, reply: FastifyR
 			deploymentTxHash?: string
 			paymentCompleted: boolean
 			deploymentCompleted: boolean
+			feePaymentToken?: string
+			fundingToken?: string
 			fundingRequested: boolean
 			fundingCompleted: boolean
 			fundingAmount?: string
@@ -1591,6 +1602,8 @@ export async function getWalletsByOwner(request: FastifyRequest, reply: FastifyR
 				deploymentTxHash: d.deploymentTxHash,
 				paymentCompleted: d.paymentCompleted,
 				deploymentCompleted: d.deploymentCompleted,
+				feePaymentToken: d.feePaymentToken,
+				fundingToken: d.fundingToken,
 				fundingRequested: d.fundingRequested,
 				fundingCompleted: d.fundingCompleted,
 				fundingAmount: d.fundingAmount,
@@ -1618,6 +1631,8 @@ export async function getWalletsByOwner(request: FastifyRequest, reply: FastifyR
 				deploymentTxHash: undefined,
 				paymentCompleted: false,
 				deploymentCompleted: false,
+				feePaymentToken: undefined,
+				fundingToken: undefined,
 				fundingRequested: false,
 				fundingCompleted: false,
 				fundingAmount: undefined,

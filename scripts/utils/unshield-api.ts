@@ -1,0 +1,363 @@
+import type { AddressData } from '@railgun-community/engine/dist/key-derivation/bech32'
+import { deriveNodes } from '@railgun-community/engine/dist/key-derivation/wallet-node'
+import type { ViewingKeyPair } from '@railgun-community/engine/dist/key-derivation/wallet-node'
+import type { Chain } from '@railgun-community/engine/dist/models/engine-types'
+import { CommitmentType } from '@railgun-community/engine/dist/models/formatted-types'
+import { TXIDVersion } from '@railgun-community/engine/dist/models/poi-types'
+import type { TXO } from '@railgun-community/engine/dist/models/txo-types'
+import { TransactNote } from '@railgun-community/engine/dist/note/transact-note'
+import { getSharedSymmetricKey } from '@railgun-community/engine/dist/utils/keys-utils'
+
+import {
+	type MerkleProofResponse,
+	type OutputCommitment,
+	type ShieldCommitment,
+	fetchCommitmentsByEOA,
+	fetchMerkleProofsBatch,
+	fetchNullifierDataBatched
+} from './api'
+import { deriveMnemonicFromEOA } from './railgun'
+import { computeNullifier } from './transaction-builder'
+
+interface TokenDataGetter {
+	getTokenDataFromHash: (tokenHash: string) => Promise<{
+		tokenAddress: string
+		tokenType: number
+		tokenSubID: string
+	}>
+}
+
+export interface SpendableUTXO {
+	txo: TXO
+	merkleProof: MerkleProofResponse
+}
+
+export interface FetchUTXOsResult {
+	spendableUTXOs: SpendableUTXO[]
+	totalCommitments: number
+	spendableCount: number
+}
+
+async function decryptShieldCommitment(
+	commitment: ShieldCommitment,
+	viewingKeyPair: ViewingKeyPair,
+	addressData: AddressData,
+	chain: Chain
+): Promise<TransactNote | null> {
+	try {
+		const ciphertext = {
+			ciphertext: [
+				commitment.encryptedBundle0,
+				commitment.encryptedBundle1,
+				commitment.encryptedBundle2,
+				'0x0000000000000000000000000000000000000000000000000000000000000000'
+			],
+			ephemeralKeys: [commitment.shieldKey, commitment.npk],
+			memo: []
+		}
+
+		const blindedReceiverViewingKey = Buffer.from(commitment.npk.replace('0x', ''), 'hex')
+		const sharedKey = await getSharedSymmetricKey(
+			viewingKeyPair.privateKey,
+			blindedReceiverViewingKey
+		)
+		if (!sharedKey) {
+			return null
+		}
+
+		const blindedSenderViewingKey = Buffer.from(commitment.shieldKey.replace('0x', ''), 'hex')
+
+		// eslint-disable-next-line @typescript-eslint/no-explicit-any
+		const decrypted = await TransactNote.decrypt(
+			TXIDVersion.V2_PoseidonMerkle,
+			chain,
+			addressData,
+			// eslint-disable-next-line @typescript-eslint/no-explicit-any
+			ciphertext as any,
+			sharedKey,
+			'',
+			'',
+			viewingKeyPair.privateKey,
+			blindedReceiverViewingKey,
+			blindedSenderViewingKey,
+			false,
+			false,
+			{
+				getTokenDataFromHash: async () => ({
+					tokenAddress: commitment.tokenAddress,
+					tokenType: Number.parseInt(commitment.tokenType.toString()),
+					tokenSubID: commitment.tokenSubID
+				})
+			} as TokenDataGetter,
+			undefined,
+			undefined
+		)
+
+		return decrypted
+	} catch {
+		return null
+	}
+}
+
+async function decryptTransactCommitment(
+	output: OutputCommitment,
+	viewingKeyPair: ViewingKeyPair,
+	addressData: AddressData,
+	chain: Chain
+): Promise<{ note: TransactNote; tokenAddress: string } | null> {
+	try {
+		const ciphertext = {
+			ciphertext: [
+				output.ciphertext.ciphertext0,
+				output.ciphertext.ciphertext1,
+				output.ciphertext.ciphertext2,
+				output.ciphertext.ciphertext3
+			],
+			ephemeralKeys: [
+				output.ciphertext.blindedSenderViewingKey,
+				output.ciphertext.blindedReceiverViewingKey
+			],
+			memo: []
+		}
+
+		const blindedReceiverViewingKey = Buffer.from(
+			output.ciphertext.blindedReceiverViewingKey.replace('0x', ''),
+			'hex'
+		)
+		const sharedKey = await getSharedSymmetricKey(
+			viewingKeyPair.privateKey,
+			blindedReceiverViewingKey
+		)
+		if (!sharedKey) {
+			return null
+		}
+
+		const blindedSenderViewingKey = Buffer.from(
+			output.ciphertext.blindedSenderViewingKey.replace('0x', ''),
+			'hex'
+		)
+
+		// eslint-disable-next-line @typescript-eslint/no-explicit-any
+		const decrypted = await TransactNote.decrypt(
+			TXIDVersion.V2_PoseidonMerkle,
+			chain,
+			addressData,
+			// eslint-disable-next-line @typescript-eslint/no-explicit-any
+			ciphertext as any,
+			sharedKey,
+			output.ciphertext.memo || '',
+			output.ciphertext.annotationData || '',
+			viewingKeyPair.privateKey,
+			blindedReceiverViewingKey,
+			blindedSenderViewingKey,
+			false,
+			false,
+			{
+				getTokenDataFromHash: async () => ({ tokenAddress: '', tokenType: 0, tokenSubID: '0x00' })
+			} as TokenDataGetter,
+			undefined,
+			undefined
+		)
+
+		return {
+			note: decrypted,
+			tokenAddress: decrypted.tokenData.tokenAddress
+		}
+	} catch {
+		return null
+	}
+}
+
+export async function fetchSpendableUTXOs(
+	apiUrl: string,
+	eoaPrivateKey: string,
+	chain: Chain,
+	tokenAddress?: string
+): Promise<FetchUTXOsResult> {
+	const { ethers } = await import('ethers')
+	const eoaWallet = new ethers.Wallet(eoaPrivateKey)
+	const eoaAddress = eoaWallet.address
+
+	const shields = await fetchCommitmentsByEOA(apiUrl, eoaAddress)
+	if (shields.length === 0) {
+		return { spendableUTXOs: [], totalCommitments: 0, spendableCount: 0 }
+	}
+
+	const mnemonic = await deriveMnemonicFromEOA(eoaPrivateKey)
+	const walletNodes = deriveNodes(mnemonic, 0)
+	const nullifyingKey = await walletNodes.spending.getNullifyingKey()
+	const viewingKeyPair = await walletNodes.viewing.getViewingKeyPair()
+	const spendingKeyPair = walletNodes.spending.getSpendingKeyPair()
+
+	// eslint-disable-next-line @typescript-eslint/no-explicit-any
+	const masterPublicKey = (walletNodes.spending.constructor as any).getMasterPublicKey(
+		spendingKeyPair.pubkey,
+		nullifyingKey
+	)
+	const addressData: AddressData = {
+		masterPublicKey,
+		viewingPublicKey: viewingKeyPair.pubkey
+	}
+
+	const allCommitments: Array<{
+		commitmentHash: string
+		treeNumber: string
+		position: string
+		tokenAddress: string
+		note: TransactNote
+		source: 'shield' | 'transact'
+	}> = []
+
+	const processedNullifiers = new Set<string>()
+
+	const queue: Array<{
+		commitmentHash: string
+		treeNumber: string
+		position: string
+		tokenAddress: string
+		source: 'shield' | 'transact'
+		shieldData?: ShieldCommitment
+		transactData?: OutputCommitment
+	}> = shields.map((s) => ({
+		commitmentHash: s.commitmentHash,
+		treeNumber: s.treeNumber,
+		position: s.position,
+		tokenAddress: s.tokenAddress,
+		source: 'shield' as const,
+		shieldData: s
+	}))
+
+	while (queue.length > 0) {
+		const batch = queue.splice(0, Math.min(queue.length, 100))
+
+		const batchWithNullifiers: Array<{
+			commitment: (typeof batch)[0]
+			nullifier: string
+		}> = []
+
+		for (const commitment of batch) {
+			const position = Number.parseInt(commitment.position, 10)
+			const nullifier = computeNullifier(nullifyingKey, position)
+
+			if (processedNullifiers.has(nullifier.toLowerCase())) {
+				continue
+			}
+
+			batchWithNullifiers.push({ commitment, nullifier })
+			processedNullifiers.add(nullifier.toLowerCase())
+		}
+
+		if (batchWithNullifiers.length === 0) {
+			continue
+		}
+
+		const nullifiers = batchWithNullifiers.map((b) => b.nullifier)
+		const nullifierStatus = await fetchNullifierDataBatched(apiUrl, nullifiers)
+
+		const unusedSet = new Set(nullifierStatus.unused.map((n) => n.toLowerCase()))
+		const usedMap = new Map(nullifierStatus.used.map((u) => [u.nullifier.toLowerCase(), u]))
+
+		for (const { commitment, nullifier } of batchWithNullifiers) {
+			const nullifierLower = nullifier.toLowerCase()
+
+			let decryptedNote: TransactNote | null = null
+
+			if (commitment.source === 'shield' && commitment.shieldData) {
+				decryptedNote = await decryptShieldCommitment(
+					commitment.shieldData,
+					viewingKeyPair,
+					addressData,
+					chain
+				)
+			} else if (commitment.source === 'transact' && commitment.transactData) {
+				const result = await decryptTransactCommitment(
+					commitment.transactData,
+					viewingKeyPair,
+					addressData,
+					chain
+				)
+				if (result) {
+					decryptedNote = result.note
+					commitment.tokenAddress = result.tokenAddress
+				}
+			}
+
+			if (!decryptedNote) {
+				continue
+			}
+
+			if (unusedSet.has(nullifierLower)) {
+				if (tokenAddress && commitment.tokenAddress.toLowerCase() !== tokenAddress.toLowerCase()) {
+					continue
+				}
+
+				allCommitments.push({
+					commitmentHash: commitment.commitmentHash,
+					treeNumber: commitment.treeNumber,
+					position: commitment.position,
+					tokenAddress: commitment.tokenAddress,
+					note: decryptedNote,
+					source: commitment.source
+				})
+			} else if (usedMap.has(nullifierLower)) {
+				const usedData = usedMap.get(nullifierLower)
+				if (usedData && usedData.type === 'TRANSACT' && usedData.outputCommitments) {
+					for (const output of usedData.outputCommitments) {
+						queue.push({
+							commitmentHash: output.commitmentHash,
+							treeNumber: commitment.treeNumber,
+							position: output.position,
+							tokenAddress: '',
+							source: 'transact',
+							transactData: output
+						})
+					}
+				}
+			}
+		}
+	}
+
+	if (allCommitments.length > 0) {
+		const merkleProofs = await fetchMerkleProofsBatch(
+			apiUrl,
+			allCommitments.map((c) => ({
+				commitmentHash: c.commitmentHash,
+				treeNumber: c.treeNumber
+			}))
+		)
+
+		const spendableUTXOs: SpendableUTXO[] = allCommitments.map((commitment, index) => {
+			const txo: TXO = {
+				tree: Number.parseInt(commitment.treeNumber, 10),
+				position: Number.parseInt(commitment.position, 10),
+				txid: '',
+				timestamp: undefined,
+				blockNumber: 0,
+				spendtxid: false,
+				nullifier: computeNullifier(nullifyingKey, Number.parseInt(commitment.position, 10)),
+				note: commitment.note,
+				poisPerList: undefined,
+				blindedCommitment: commitment.commitmentHash,
+				commitmentType: CommitmentType.ShieldCommitment,
+				transactCreationRailgunTxid: undefined
+			}
+
+			return {
+				txo,
+				merkleProof: merkleProofs[index]
+			}
+		})
+
+		return {
+			spendableUTXOs,
+			totalCommitments: shields.length,
+			spendableCount: allCommitments.length
+		}
+	}
+
+	return {
+		spendableUTXOs: [],
+		totalCommitments: shields.length,
+		spendableCount: 0
+	}
+}

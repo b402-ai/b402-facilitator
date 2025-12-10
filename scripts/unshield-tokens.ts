@@ -14,7 +14,6 @@ import {
 	WakuBroadcasterClient
 } from '@railgun-community/waku-broadcaster-client-node'
 import {
-	ArtifactStore,
 	balanceForERC20Token,
 	calculateBroadcasterFeeERC20Amount,
 	createRailgunWallet,
@@ -28,11 +27,13 @@ import {
 	stopRailgunEngine
 } from '@railgun-community/wallet'
 import 'dotenv/config'
-import { Mnemonic, ethers } from 'ethers'
+import { ethers } from 'ethers'
 import { MemoryLevel } from 'memory-level'
-import { promises as fs } from 'node:fs'
 import * as path from 'node:path'
 import * as snarkjs from 'snarkjs'
+
+import { getPrivacyBalance } from './utils/balance'
+import { ERC20_ABI, createFileBasedArtifactStore, deriveMnemonicFromEOA } from './utils/railgun'
 
 type UnshieldMode = 'broadcaster' | 'eoa'
 
@@ -47,6 +48,7 @@ interface UnshieldConfig {
 	recipientAddress: string
 	railgunSmartWalletAddress: string
 	rpcUrl: string
+	apiUrl: string // B402 Backend API URL for privacy operations
 }
 
 // --- Config (edit this) ---
@@ -60,15 +62,10 @@ const CONFIG: UnshieldConfig = {
 	amount: ethers.parseUnits('0.005', 18),
 	recipientAddress: '0x0553b926d6a599caac56377042ca6b40dd0b7f4e', // Where tokens go
 	railgunSmartWalletAddress: '0x590162bf4b50f6576a459b75309ee21d92178a10',
-	rpcUrl: process.env.BSC_RPC_URL || ''
+	rpcUrl: process.env.BSC_RPC_URL || '',
+	apiUrl: 'http://localhost:3000' // B402 Backend API URL (edit this)
 }
 // ---------------------------
-const B402_RESERVED_ZK_MESSAGE = 'b402 Reserved Railgun zk-Address'
-const ERC20_ABI = [
-	'function balanceOf(address account) external view returns (uint256)',
-	'function decimals() external view returns (uint8)',
-	'function symbol() external view returns (string)'
-] as const
 
 async function initializeBroadcaster(chain: { type: number; id: number }): Promise<void> {
 	return new Promise((resolve, reject) => {
@@ -153,6 +150,24 @@ async function unshieldTokens(config: UnshieldConfig) {
 	}
 	if (!config.recipientAddress) {
 		throw new Error('Recipient address not configured')
+	}
+	if (!config.apiUrl || config.apiUrl === '') {
+		throw new Error('API URL not configured')
+	}
+
+	// Check balance BEFORE unshielding
+	console.log('\n=== BALANCE BEFORE UNSHIELDING ===')
+	try {
+		const balanceBefore = await getPrivacyBalance({
+			eoaPrivateKey: config.eoaPrivateKey,
+			rpcUrl: config.rpcUrl,
+			apiUrl: config.apiUrl,
+			tokenAddresses: [config.token.address]
+		})
+		console.log(balanceBefore.summary)
+	} catch (error) {
+		console.warn('Could not fetch balance before unshielding:', error)
+		console.log('Continuing with unshield operation...\n')
 	}
 
 	const provider = new ethers.JsonRpcProvider(config.rpcUrl)
@@ -444,6 +459,23 @@ async function unshieldTokens(config: UnshieldConfig) {
 		WakuBroadcasterClient.stop()
 	}
 	await stopRailgunEngine()
+
+	// Check balance AFTER unshielding
+	console.log('\n=== BALANCE AFTER UNSHIELDING ===')
+	console.log('Waiting 10 seconds for indexer to sync...')
+	await new Promise((resolve) => setTimeout(resolve, 10000))
+
+	try {
+		const balanceAfter = await getPrivacyBalance({
+			eoaPrivateKey: config.eoaPrivateKey,
+			rpcUrl: config.rpcUrl,
+			apiUrl: config.apiUrl,
+			tokenAddresses: [config.token.address]
+		})
+		console.log(balanceAfter.summary)
+	} catch (error) {
+		console.warn('Could not fetch balance after unshielding:', error)
+	}
 }
 
 unshieldTokens(CONFIG).catch((error) => {
@@ -453,58 +485,3 @@ unshieldTokens(CONFIG).catch((error) => {
 	}
 	stopRailgunEngine().finally(() => process.exit(1))
 })
-
-// ---  Helper functions ---
-
-async function deriveMnemonicFromEOA(eoaPrivateKey: string): Promise<string> {
-	const wallet = new ethers.Wallet(eoaPrivateKey)
-	const message = B402_RESERVED_ZK_MESSAGE
-	const signature = await wallet.signMessage(message)
-	const entropy = ethers.keccak256(signature).slice(0, 34)
-	const mnemonic = Mnemonic.fromEntropy(entropy)
-	return mnemonic.phrase
-}
-
-function createFileBasedArtifactStore(artifactsDir: string): ArtifactStore {
-	return new ArtifactStore(
-		// getFile
-		async (filePath: string) => {
-			const fullPath = path.join(artifactsDir, filePath)
-			try {
-				const data = await fs.readFile(fullPath)
-				// Return Buffer for binary files, string for text files
-				if (filePath.endsWith('.json')) {
-					return data.toString('utf8')
-				}
-				return data
-			} catch (error) {
-				throw new Error(`Artifact not found: ${filePath}`)
-			}
-		},
-		// putFile - dir parameter is just a hint, filePath already contains full relative path
-		async (_dir: string, filePath: string, item: string | Uint8Array) => {
-			const fullPath = path.join(artifactsDir, filePath)
-			const dirPath = path.dirname(fullPath)
-
-			// Ensure directory exists
-			await fs.mkdir(dirPath, { recursive: true })
-
-			// Write file
-			if (typeof item === 'string') {
-				await fs.writeFile(fullPath, item, 'utf8')
-			} else {
-				await fs.writeFile(fullPath, item)
-			}
-		},
-		// fileExists
-		async (filePath: string) => {
-			const fullPath = path.join(artifactsDir, filePath)
-			try {
-				await fs.access(fullPath)
-				return true
-			} catch {
-				return false
-			}
-		}
-	)
-}

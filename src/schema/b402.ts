@@ -49,9 +49,10 @@ export const PaymentRequirementsSchema = {
 					minItems: 1,
 					maxItems: 10
 				},
-				fundingRequested: { type: 'boolean' }
+				fundingRequested: { type: 'boolean' },
+				token: { type: 'string' }
 			},
-			required: ['ownerAddress', 'salts'],
+			required: ['ownerAddress', 'salts', 'token'],
 			additionalProperties: false
 		}
 	},
@@ -357,6 +358,8 @@ export const GetWalletsByOwnerResponseSchema = {
 					deploymentTxHash: { type: 'string' },
 					paymentCompleted: { type: 'boolean' },
 					deploymentCompleted: { type: 'boolean' },
+					feePaymentToken: { type: 'string' },
+					fundingToken: { type: 'string' },
 					fundingRequested: { type: 'boolean' },
 					fundingCompleted: { type: 'boolean' },
 					fundingAmount: { type: 'string' },
@@ -372,6 +375,8 @@ export const GetWalletsByOwnerResponseSchema = {
 					'paymentTxHash',
 					'paymentCompleted',
 					'deploymentCompleted',
+					'fundingRequested',
+					'fundingCompleted',
 					'createdAt',
 					'updatedAt'
 				],
@@ -391,6 +396,8 @@ export const GetWalletsByOwnerResponseSchema = {
 					deploymentTxHash: { type: 'string' },
 					paymentCompleted: { type: 'boolean' },
 					deploymentCompleted: { type: 'boolean' },
+					feePaymentToken: { type: 'string' },
+					fundingToken: { type: 'string' },
 					fundingRequested: { type: 'boolean' },
 					fundingCompleted: { type: 'boolean' },
 					fundingAmount: { type: 'string' },
@@ -406,6 +413,8 @@ export const GetWalletsByOwnerResponseSchema = {
 					'paymentTxHash',
 					'paymentCompleted',
 					'deploymentCompleted',
+					'fundingRequested',
+					'fundingCompleted',
 					'createdAt',
 					'updatedAt'
 				],
@@ -686,6 +695,7 @@ export interface PaymentRequirements {
 		ownerAddress: string
 		salts: string[]
 		fundingRequested?: boolean
+		token: string
 	}
 }
 
@@ -808,6 +818,12 @@ export interface WalletDeploymentRecord {
 	deploymentTxHash?: string
 	paymentCompleted: boolean
 	deploymentCompleted: boolean
+	feePaymentToken?: string
+	fundingToken?: string
+	fundingRequested: boolean
+	fundingCompleted: boolean
+	fundingAmount?: string
+	fundingTxHash?: string
 	createdAt: string
 	updatedAt: string
 }
