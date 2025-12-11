@@ -22,6 +22,21 @@ import {
 	VerifyWalletPaymentResponseSchema
 } from '../../schema/b402'
 import {
+	SwapExecuteSettleRequestSchema,
+	SwapExecuteSettleResponseSchema,
+	SwapExecuteVerifyRequestSchema,
+	SwapExecuteVerifyResponseSchema,
+	SwapGaslessApproveRequestSchema,
+	SwapGaslessApproveResponseSchema,
+	SwapHealthResponseSchema,
+	SwapPaymentIntentRequestSchema,
+	SwapPaymentIntentResponseSchema,
+	SwapQuoteQuerySchema,
+	SwapQuoteResponseSchema,
+	SwapRequestSchema,
+	SwapResponseSchema
+} from '../../schema/swap'
+import {
 	claimWalletDeployment,
 	getMasterWalletAddress,
 	getWalletsByOwner,
@@ -204,26 +219,81 @@ export const register = (server: FastifyInstance, _: any, next: any) => {
 		health
 	)
 
-	// Get swap quote
-	server.get('/swap/quote', swapQuote)
+	server.get(
+		'/swap/quote',
+		{
+			schema: {
+				querystring: SwapQuoteQuerySchema,
+				response: { 200: SwapQuoteResponseSchema }
+			}
+		},
+		swapQuote
+	)
 
-	// Get swap service health
-	server.get('/swap/health', swapHealth)
+	server.get(
+		'/swap/health',
+		{
+			schema: {
+				response: { 200: SwapHealthResponseSchema }
+			}
+		},
+		swapHealth
+	)
 
-	// Execute swap
-	server.post('/swap', swap)
+	server.post(
+		'/swap',
+		{
+			schema: {
+				body: SwapRequestSchema,
+				response: { 200: SwapResponseSchema }
+			}
+		},
+		swap
+	)
 
-	// Get payment intent for signing
-	server.post('/swap/payment-intent', swapPaymentIntent)
+	server.post(
+		'/swap/payment-intent',
+		{
+			schema: {
+				body: SwapPaymentIntentRequestSchema,
+				response: { 200: SwapPaymentIntentResponseSchema }
+			}
+		},
+		swapPaymentIntent
+	)
 
-	// Gasless approval via EIP-2612 permit
-	server.post('/swap/gasless-approve', swapGaslessApprove)
+	server.post(
+		'/swap/gasless-approve',
+		{
+			schema: {
+				body: SwapGaslessApproveRequestSchema,
+				response: { 200: SwapGaslessApproveResponseSchema }
+			}
+		},
+		swapGaslessApprove
+	)
 
-	// Build UserOp for single-sig swap
-	server.post('/swap/execute/verify', swapExecuteVerify)
+	server.post(
+		'/swap/execute/verify',
+		{
+			schema: {
+				body: SwapExecuteVerifyRequestSchema,
+				response: { 200: SwapExecuteVerifyResponseSchema }
+			}
+		},
+		swapExecuteVerify
+	)
 
-	// Execute single-sig swap (submit UserOp + swap)
-	server.post('/swap/execute/settle', swapExecuteSettle)
+	server.post(
+		'/swap/execute/settle',
+		{
+			schema: {
+				body: SwapExecuteSettleRequestSchema,
+				response: { 200: SwapExecuteSettleResponseSchema }
+			}
+		},
+		swapExecuteSettle
+	)
 
 	next()
 }

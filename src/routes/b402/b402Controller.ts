@@ -2037,8 +2037,6 @@ export async function swap(request: FastifyRequest, reply: FastifyReply) {
 			})
 		}
 
-		console.log('Swap request received:', JSON.stringify(body, null, 2))
-
 		const swapService = getSwapService()
 		const result = await swapService.executeSwap(body)
 
