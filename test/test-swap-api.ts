@@ -58,7 +58,7 @@ async function runTest(name: string, testFn: () => Promise<unknown>): Promise<Te
 			data
 		}
 		results.push(result)
-		console.log(`✅ ${name} (${result.duration}ms)`)
+		console.log(`[PASS] ${name} (${result.duration}ms)`)
 		return result
 	} catch (error) {
 		const result: TestResult = {
@@ -68,7 +68,7 @@ async function runTest(name: string, testFn: () => Promise<unknown>): Promise<Te
 			error: error instanceof Error ? error.message : String(error)
 		}
 		results.push(result)
-		console.log(`❌ ${name}: ${result.error}`)
+		console.log(`[FAIL] ${name}: ${result.error}`)
 		return result
 	}
 }
@@ -258,7 +258,7 @@ async function testPaymentIntent() {
 
 async function testFullSwapFlow() {
 	if (!TEST_PRIVATE_KEY) {
-		console.log('   ⏭️  Skipping full swap test (no TEST_PRIVATE_KEY)')
+		console.log('   [SKIP] Skipping full swap test (no TEST_PRIVATE_KEY)')
 		return { skipped: true, reason: 'No TEST_PRIVATE_KEY provided' }
 	}
 
@@ -360,7 +360,7 @@ async function testFullSwapFlow() {
 		throw new Error(`Swap failed: ${swapResult.error}`)
 	}
 
-	console.log(`   ✅ Swap successful! TX: ${swapResult.txHash}`)
+	console.log(`   [OK] Swap successful! TX: ${swapResult.txHash}`)
 	return swapResult
 }
 
@@ -369,16 +369,16 @@ async function testFullSwapFlow() {
 // ============================================
 
 async function main() {
-	console.log('\n🧪 B402 Swap API Test Suite\n')
+	console.log('\nB402 Swap API Test Suite\n')
 	console.log(`API URL: ${API_BASE_URL}\n`)
 	console.log('─'.repeat(50))
 
 	// Health & Basic Tests
-	console.log('\n📊 Health & Configuration\n')
+	console.log('\n[Health & Configuration]\n')
 	await runTest('GET /swap/health', testHealthEndpoint)
 
 	// Quote Tests
-	console.log('\n💱 Quote Endpoint Tests\n')
+	console.log('\n[Quote Endpoint Tests]\n')
 	await runTest('GET /swap/quote (USD1 → USDC)', testQuoteUSD1toUSDC)
 	await runTest('GET /swap/quote (USD1 → WBNB)', testQuoteUSD1toWBNB)
 	await runTest('GET /swap/quote (WBNB → USDT)', testQuoteWBNBtoUSDT)
@@ -387,27 +387,27 @@ async function main() {
 	await runTest('GET /swap/quote (missing params)', testQuoteMissingParams)
 
 	// Payment Intent Tests
-	console.log('\n📝 Payment Intent Tests\n')
+	console.log('\n[Payment Intent Tests]\n')
 	await runTest('POST /swap/payment-intent', testPaymentIntent)
 
 	// Full Swap Flow (requires funded wallet)
-	console.log('\n🔄 Full Swap Flow\n')
+	console.log('\n[Full Swap Flow]\n')
 	await runTest('POST /swap (full flow)', testFullSwapFlow)
 
 	// Summary
 	console.log('\n' + '─'.repeat(50))
-	console.log('\n📋 Test Summary\n')
+	console.log('\n[Test Summary]\n')
 
 	const passed = results.filter((r) => r.passed).length
 	const failed = results.filter((r) => !r.passed).length
 
 	console.log(`   Total:  ${results.length}`)
-	console.log(`   Passed: ${passed} ✅`)
-	console.log(`   Failed: ${failed} ❌`)
+	console.log(`   Passed: ${passed}`)
+	console.log(`   Failed: ${failed}`)
 	console.log(`   Time:   ${results.reduce((sum, r) => sum + r.duration, 0)}ms`)
 
 	if (failed > 0) {
-		console.log('\n❌ Failed Tests:')
+		console.log('\nFailed Tests:')
 		results
 			.filter((r) => !r.passed)
 			.forEach((r) => {
@@ -416,7 +416,7 @@ async function main() {
 		process.exit(1)
 	}
 
-	console.log('\n✅ All tests passed!\n')
+	console.log('\nAll tests passed!\n')
 }
 
 main().catch(console.error)
