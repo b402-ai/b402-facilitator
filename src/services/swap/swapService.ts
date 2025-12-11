@@ -128,8 +128,6 @@ class SwapService {
 		const providerService = getProviderService()
 		this.provider = providerService.getProvider()
 
-		// Use the relayer private key for swap operations
-		// Can be changed to a dedicated swap wallet if needed
 		this.serverWallet = new Wallet(env.RELAYER_PRIVATE_KEY, this.provider)
 
 		this.quoter = new Contract(PANCAKE_V3_QUOTER, QUOTER_ABI, this.provider)
@@ -142,39 +140,24 @@ class SwapService {
 		)
 	}
 
-	/**
-	 * Get current BNB price in USD from Chainlink
-	 */
 	async getBnbPriceUSD(): Promise<number> {
 		try {
 			const roundData = await this.priceFeed.latestRoundData()
-			// Chainlink BNB/USD has 8 decimals
 			const price = Number(roundData.answer) / 1e8
 			return price
 		} catch (error) {
-			console.warn('Failed to fetch BNB price from Chainlink, using fallback:', error)
-			// Fallback to reasonable estimate if Chainlink fails
 			return 600
 		}
 	}
 
-	/**
-	 * Get the configurable service fee
-	 */
 	getServiceFee(): string {
 		return env.SWAP_SERVICE_FEE
 	}
 
-	/**
-	 * Get the server wallet address
-	 */
 	getServerWalletAddress(): string {
 		return this.serverWallet.address
 	}
 
-	/**
-	 * Get health status
-	 */
 	async getHealth(): Promise<SwapHealthResponse> {
 		const balance = await this.provider.getBalance(this.serverWallet.address)
 		const providerService = getProviderService()
@@ -190,12 +173,7 @@ class SwapService {
 		}
 	}
 
-	/**
-	 * Get best V3 quote across all fee tiers
-	 */
 	async getQuote(tokenIn: string, tokenOut: string, amountIn: string): Promise<SwapQuote> {
-		console.log(`\n💫 Getting V3 quote: ${tokenIn.slice(0, 10)}... → ${tokenOut.slice(0, 10)}...`)
-
 		let bestQuote: { amountOut: bigint; fee: number; gasEstimate: bigint } | null = null
 		let bestFee = 0
 
@@ -212,8 +190,6 @@ class SwapService {
 				const result = await this.quoter.quoteExactInputSingle.staticCall(params)
 				const amountOut = result[0]
 
-				console.log(`   Fee ${fee / 10000}%: ${ethers.formatUnits(amountOut, 18)} out`)
-
 				if (!bestQuote || amountOut > bestQuote.amountOut) {
 					bestQuote = {
 						amountOut,
@@ -223,8 +199,7 @@ class SwapService {
 					bestFee = fee
 				}
 			} catch (e) {
-				// This fee tier might not have a pool, skip it
-				console.log(`   Fee ${fee / 10000}%: No pool`)
+				// This fee tier might not have a pool
 			}
 		}
 
@@ -232,11 +207,7 @@ class SwapService {
 			throw new Error('No liquidity found for this pair')
 		}
 
-		// 0.5% slippage tolerance
 		const minAmountOut = (bestQuote.amountOut * BigInt(995)) / BigInt(1000)
-
-		console.log(`   ✅ Best: ${bestFee / 10000}% fee tier`)
-		console.log(`   Output: ${ethers.formatUnits(bestQuote.amountOut, 18)}\n`)
 
 		return {
 			tokenIn,
@@ -255,26 +226,15 @@ class SwapService {
 		}
 	}
 
-	/**
-	 * Execute swap with B402 payment verification
-	 */
 	async executeSwap(request: SwapRequest): Promise<SwapResult> {
 		const { user, tokenIn, tokenOut, amountIn, minAmountOut, fee, paymentSignature } = request
-
-		console.log(`\n🔄 V3 Swap from ${user.slice(0, 10)}...`)
-		console.log(`   ${tokenIn.slice(0, 10)}... → ${tokenOut.slice(0, 10)}...`)
-		console.log(`   Amount: ${ethers.formatUnits(amountIn, 18)}`)
-		console.log(`   Fee tier: ${fee / 10000}%`)
-
 		const startTime = Date.now()
 		const serviceFee = this.getServiceFee()
 
 		try {
-			// Service fee is embedded in the authorization.value pulled from user
 			const { authorization, signature } = paymentSignature.payload
 			const sig = ethers.Signature.from(signature)
 
-			// Step 0: Validate nonce hasn't been used
 			const nonceUsed = await this.relayerContract.authorizationState(
 				authorization.from,
 				authorization.nonce
@@ -286,18 +246,12 @@ class SwapService {
 				}
 			}
 
-			// Check user balance and allowance
 			const tokenContract = new Contract(tokenIn, ERC20_ABI, this.serverWallet)
-
 			const userBalance = await tokenContract.balanceOf(authorization.from)
 			const userAllowance = await tokenContract.allowance(
 				authorization.from,
 				env.B402_RELAYER_ADDRESS
 			)
-
-			console.log(`   📊 User balance: ${ethers.formatUnits(userBalance, 18)}`)
-			console.log(`   📊 User allowance to relayer: ${ethers.formatUnits(userAllowance, 18)}`)
-			console.log(`   📊 Trying to pull: ${ethers.formatUnits(authorization.value, 18)}`)
 
 			if (userBalance < BigInt(authorization.value)) {
 				return {
@@ -313,9 +267,6 @@ class SwapService {
 				}
 			}
 
-			// Step 1: Pull tokens using B402 relayer's transferWithAuthorization
-			console.log('   💰 Pulling swap amount + fee via B402 transferWithAuthorization...')
-
 			const pullTx = await this.relayerContract.transferWithAuthorization(
 				tokenIn,
 				authorization.from,
@@ -330,28 +281,15 @@ class SwapService {
 				{ gasLimit: 150000 }
 			)
 			await pullTx.wait()
-			console.log(
-				`   ✅ Pulled ${ethers.formatUnits(authorization.value, 18)} tokens total via B402`
-			)
 
-			// Step 2: Approve to V3 Router (unlimited, one-time)
 			const allowance = await tokenContract.allowance(this.serverWallet.address, PANCAKE_V3_ROUTER)
-
 			if (allowance < BigInt(amountIn)) {
-				console.log('   ⚙️  Approving unlimited to V3 Router (one-time)...')
 				const approveTx = await tokenContract.approve(PANCAKE_V3_ROUTER, ethers.MaxUint256, {
 					gasLimit: 100000
 				})
 				await approveTx.wait()
-				console.log('   ✅ Approved unlimited')
-			} else {
-				console.log('   ✅ Already approved (saved gas!)')
 			}
 
-			// Step 3: Execute V3 swap via Smart Router (no deadline param)
-			console.log('   🔄 Executing V3 swap...')
-
-			// Ensure amounts are BigInt for contract call
 			const amountInBigInt = BigInt(amountIn)
 			const minAmountOutBigInt = minAmountOut ? BigInt(minAmountOut) : 0n
 
@@ -359,7 +297,7 @@ class SwapService {
 				tokenIn,
 				tokenOut,
 				fee,
-				recipient: user, // Output goes directly to user!
+				recipient: user,
 				amountIn: amountInBigInt,
 				amountOutMinimum: minAmountOutBigInt,
 				sqrtPriceLimitX96: 0n
@@ -368,23 +306,13 @@ class SwapService {
 			const swapTx = await this.router.exactInputSingle(swapParams, {
 				gasLimit: 300000
 			})
-
-			console.log(`   📤 TX sent: ${swapTx.hash}`)
 			const receipt = await swapTx.wait()
-			console.log(`   ✅ Swap confirmed in block ${receipt.blockNumber}`)
 
 			const executionTime = Date.now() - startTime
 			const gasPrice = (await this.provider.getFeeData()).gasPrice || 0n
 			const gasCostWei = receipt.gasUsed * gasPrice
 			const bnbPrice = await this.getBnbPriceUSD()
 			const gasCostUSD = parseFloat(ethers.formatEther(gasCostWei)) * bnbPrice
-
-			console.log(`\n✅ V3 Swap complete!`)
-			console.log(`   ⏱️  Time: ${executionTime}ms`)
-			console.log(`   ⛽ Gas used: ${receipt.gasUsed.toString()}`)
-			console.log(`   💵 Gas cost: $${gasCostUSD.toFixed(4)} (BNB @ $${bnbPrice.toFixed(2)})`)
-			console.log(`   💰 Fee collected: ${serviceFee} tokens`)
-			console.log(`   📈 Profit: $${(parseFloat(serviceFee) - gasCostUSD).toFixed(4)}\n`)
 
 			return {
 				success: true,
@@ -401,7 +329,7 @@ class SwapService {
 				}
 			}
 		} catch (error) {
-			console.error('❌ Swap error:', error)
+			console.error('Swap error:', error)
 			return {
 				success: false,
 				error: error instanceof Error ? error.message : 'Swap execution failed'
@@ -409,9 +337,6 @@ class SwapService {
 		}
 	}
 
-	/**
-	 * Execute gasless approval using EIP-2612 permit
-	 */
 	async gaslessApprove(
 		user: string,
 		tokenIn: string,
@@ -436,21 +361,14 @@ class SwapService {
 			userGasCost: string
 		}
 	}> {
-		console.log(`\n🔓 Gasless Approval (EIP-2612 Permit) for ${user.slice(0, 10)}...`)
-		console.log(`   Token: ${tokenIn.slice(0, 10)}...`)
-
 		const startTime = Date.now()
 
 		try {
-			// Check if already approved to B402 RELAYER
 			const tokenContract = new Contract(tokenIn, ERC20_ABI, this.serverWallet)
-
 			const currentAllowance = await tokenContract.allowance(user, env.B402_RELAYER_ADDRESS)
 
 			if (currentAllowance >= ethers.MaxUint256 / 2n) {
-				console.log('   ✅ Already approved to B402 relayer (unlimited allowance exists)')
 				const executionTime = Date.now() - startTime
-
 				return {
 					success: true,
 					alreadyApproved: true,
@@ -460,9 +378,6 @@ class SwapService {
 					}
 				}
 			}
-
-			// Execute permit (server pays gas) - approve B402 RELAYER
-			console.log('   ⚙️  Executing permit for B402 relayer (server pays gas)...')
 
 			const { v, r, s, deadline, value } = permitSignature
 
@@ -479,22 +394,11 @@ class SwapService {
 				)
 
 				const receipt = await permitTx.wait()
-
-				console.log(`   ✅ Permit executed: ${receipt.hash}`)
-				console.log(`   ⛽ Gas used: ${receipt.gasUsed.toString()}`)
-
 				const executionTime = Date.now() - startTime
 				const gasPrice = (await this.provider.getFeeData()).gasPrice || 0n
 				const gasCostWei = receipt.gasUsed * gasPrice
 				const bnbPrice = await this.getBnbPriceUSD()
 				const gasCostUSD = parseFloat(ethers.formatEther(gasCostWei)) * bnbPrice
-
-				console.log(`\n✅ Gasless approval complete!`)
-				console.log(`   ⏱️  Time: ${executionTime}ms`)
-				console.log(
-					`   💵 Server gas cost: $${gasCostUSD.toFixed(4)} (BNB @ $${bnbPrice.toFixed(2)})`
-				)
-				console.log(`   🎉 User paid: $0.00\n`)
 
 				return {
 					success: true,
@@ -508,11 +412,6 @@ class SwapService {
 					}
 				}
 			} catch (permitError) {
-				// Token might not support EIP-2612
-				console.log(
-					`   ⚠️  Permit not supported: ${permitError instanceof Error ? permitError.message : 'Unknown error'}`
-				)
-
 				return {
 					success: false,
 					permitNotSupported: true,
@@ -520,7 +419,7 @@ class SwapService {
 				}
 			}
 		} catch (error) {
-			console.error('❌ Gasless approval error:', error)
+			console.error('Gasless approval error:', error)
 			return {
 				success: false,
 				error: error instanceof Error ? error.message : 'Gasless approval failed'
@@ -528,9 +427,6 @@ class SwapService {
 		}
 	}
 
-	/**
-	 * Get EIP-712 payment intent for user to sign
-	 */
 	async getPaymentIntent(
 		user: string,
 		_tokenIn: string,
@@ -563,16 +459,14 @@ class SwapService {
 			feeAmountFormatted: string
 		}
 	}> {
-		// Calculate fee based on gas estimate + margin
-		const gasPrice = (await this.provider.getFeeData()).gasPrice || 3000000000n // 3 Gwei default
+		const gasPrice = (await this.provider.getFeeData()).gasPrice || 3000000000n
 		const estimatedGas = BigInt(gasEstimate || 200000)
 		const gasCostWei = estimatedGas * gasPrice
 		const bnbPrice = await this.getBnbPriceUSD()
 		const gasCostUSD = parseFloat(ethers.formatEther(gasCostWei)) * bnbPrice
-		const margin = 0.15 // $0.15 margin
+		const margin = 0.15
 		const totalFeeUSD = gasCostUSD + margin
 
-		// Convert to token amount (assuming 1:1 with USD for stablecoins)
 		const feeAmount = ethers.parseUnits(totalFeeUSD.toFixed(2), 18)
 
 		const now = Math.floor(Date.now() / 1000)
@@ -620,11 +514,6 @@ class SwapService {
 		}
 	}
 
-	/**
-	 * Execute swap after tokens have been transferred via UserOp
-	 * This is the single-signature flow where user's smart wallet transfers tokens
-	 * to the swap server, then we execute the swap
-	 */
 	async executeSwapFromTransfer(params: {
 		user: string
 		tokenIn: string
@@ -634,21 +523,12 @@ class SwapService {
 		fee: number
 	}): Promise<SwapResult> {
 		const { user, tokenIn, tokenOut, amountIn, minAmountOut, fee } = params
-
-		console.log(`\n🔄 V3 Swap (Single-Sig) from ${user.slice(0, 10)}...`)
-		console.log(`   ${tokenIn.slice(0, 10)}... → ${tokenOut.slice(0, 10)}...`)
-		console.log(`   Amount: ${ethers.formatUnits(amountIn, 18)}`)
-		console.log(`   Fee tier: ${fee / 10000}%`)
-
 		const startTime = Date.now()
 		const serviceFee = this.getServiceFee()
 
 		try {
 			const tokenContract = new Contract(tokenIn, ERC20_ABI, this.serverWallet)
-
-			// Verify we received the tokens
 			const serverBalance = await tokenContract.balanceOf(this.serverWallet.address)
-			console.log(`   📊 Server balance: ${ethers.formatUnits(serverBalance, 18)}`)
 
 			if (serverBalance < BigInt(amountIn)) {
 				return {
@@ -657,24 +537,14 @@ class SwapService {
 				}
 			}
 
-			// Approve to V3 Router (unlimited, one-time)
 			const allowance = await tokenContract.allowance(this.serverWallet.address, PANCAKE_V3_ROUTER)
-
 			if (allowance < BigInt(amountIn)) {
-				console.log('   ⚙️  Approving unlimited to V3 Router (one-time)...')
 				const approveTx = await tokenContract.approve(PANCAKE_V3_ROUTER, ethers.MaxUint256, {
 					gasLimit: 100000
 				})
 				await approveTx.wait()
-				console.log('   ✅ Approved unlimited')
-			} else {
-				console.log('   ✅ Already approved (saved gas!)')
 			}
 
-			// Execute V3 swap via Smart Router (no deadline param)
-			console.log('   🔄 Executing V3 swap...')
-
-			// Ensure amounts are BigInt for contract call
 			const amountInBigInt = BigInt(amountIn)
 			const minAmountOutBigInt = minAmountOut ? BigInt(minAmountOut) : 0n
 
@@ -682,7 +552,7 @@ class SwapService {
 				tokenIn,
 				tokenOut,
 				fee,
-				recipient: user, // Output goes directly to user!
+				recipient: user,
 				amountIn: amountInBigInt,
 				amountOutMinimum: minAmountOutBigInt,
 				sqrtPriceLimitX96: 0n
@@ -691,23 +561,13 @@ class SwapService {
 			const swapTx = await this.router.exactInputSingle(swapParams, {
 				gasLimit: 300000
 			})
-
-			console.log(`   📤 TX sent: ${swapTx.hash}`)
 			const receipt = await swapTx.wait()
-			console.log(`   ✅ Swap confirmed in block ${receipt.blockNumber}`)
 
 			const executionTime = Date.now() - startTime
 			const gasPrice = (await this.provider.getFeeData()).gasPrice || 0n
 			const gasCostWei = receipt.gasUsed * gasPrice
 			const bnbPrice = await this.getBnbPriceUSD()
 			const gasCostUSD = parseFloat(ethers.formatEther(gasCostWei)) * bnbPrice
-
-			console.log(`\n✅ V3 Swap (Single-Sig) complete!`)
-			console.log(`   ⏱️  Time: ${executionTime}ms`)
-			console.log(`   ⛽ Gas used: ${receipt.gasUsed.toString()}`)
-			console.log(`   💵 Gas cost: $${gasCostUSD.toFixed(4)} (BNB @ $${bnbPrice.toFixed(2)})`)
-			console.log(`   💰 Fee collected: ${serviceFee} tokens`)
-			console.log(`   📈 Profit: $${(parseFloat(serviceFee) - gasCostUSD).toFixed(4)}\n`)
 
 			return {
 				success: true,
@@ -724,7 +584,7 @@ class SwapService {
 				}
 			}
 		} catch (error) {
-			console.error('❌ Swap (Single-Sig) error:', error)
+			console.error('Swap error:', error)
 			return {
 				success: false,
 				error: error instanceof Error ? error.message : 'Swap execution failed'

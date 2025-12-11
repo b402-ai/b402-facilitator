@@ -204,10 +204,6 @@ export const register = (server: FastifyInstance, _: any, next: any) => {
 		health
 	)
 
-	// ==========================================
-	// Swap Endpoints (PancakeSwap V3)
-	// ==========================================
-
 	// Get swap quote
 	server.get('/swap/quote', swapQuote)
 
@@ -222,10 +218,6 @@ export const register = (server: FastifyInstance, _: any, next: any) => {
 
 	// Gasless approval via EIP-2612 permit
 	server.post('/swap/gasless-approve', swapGaslessApprove)
-
-	// ==========================================
-	// Single-Signature Swap (Smart Wallet UserOp)
-	// ==========================================
 
 	// Build UserOp for single-sig swap
 	server.post('/swap/execute/verify', swapExecuteVerify)

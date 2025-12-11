@@ -2312,11 +2312,8 @@ export async function swapExecuteSettle(request: FastifyRequest, reply: FastifyR
 			})
 		}
 
-		// Add signature to userOp
 		body.userOp.signature = body.signature
 
-		// Submit UserOp to bundler
-		console.log('📤 Submitting UserOp to transfer tokens to swap server...')
 		let userOpHash: string
 		try {
 			userOpHash = await submitUserOpToBundler(body.userOp)
@@ -2325,8 +2322,6 @@ export async function swapExecuteSettle(request: FastifyRequest, reply: FastifyR
 			throw new BaseErrors.ERR_BUNDLER_SUBMISSION_FAILED()
 		}
 
-		// Wait for UserOp confirmation
-		console.log(`⏳ Waiting for UserOp ${userOpHash} confirmation...`)
 		let txHash = ''
 		let confirmed = false
 		for (let i = 0; i < 30; i++) {
@@ -2336,7 +2331,6 @@ export async function swapExecuteSettle(request: FastifyRequest, reply: FastifyR
 				if (receipt.success) {
 					txHash = receipt.txHash
 					confirmed = true
-					console.log(`✅ UserOp confirmed: ${txHash}`)
 					break
 				}
 			} catch {
@@ -2348,8 +2342,6 @@ export async function swapExecuteSettle(request: FastifyRequest, reply: FastifyR
 			throw new BaseErrors.ERR_TRANSACTION_CONFIRMATION_FAILED()
 		}
 
-		// Now execute the swap (tokens should be in server wallet)
-		console.log('🔄 Executing swap...')
 		const swapService = getSwapService()
 		const swapResult = await swapService.executeSwapFromTransfer(body.swapParams)
 
