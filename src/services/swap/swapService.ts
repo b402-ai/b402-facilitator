@@ -15,14 +15,12 @@ import { env } from '../../schema/env'
 import { getProviderService } from '../../utils/provider'
 
 // PancakeSwap V3 Contracts (BSC Mainnet)
+// Using Smart Router which has different ABI (no deadline param)
 const PANCAKE_V3_ROUTER = '0x13f4EA83D0bd40E75C8222255bc855a974568Dd4'
 const PANCAKE_V3_QUOTER = '0xB048Bbc1Ee6b733FFfCFb9e9CeF7375518e25997'
 
 // Fee tiers (in hundredths of a bip, so 100 = 0.01%)
 const FEE_TIERS = [100, 500, 2500, 10000] // 0.01%, 0.05%, 0.25%, 1%
-
-// Swap deadline (20 minutes from now)
-const SWAP_DEADLINE_SECONDS = 20 * 60
 
 // BNB/USD price feed (Chainlink on BSC)
 const BNB_USD_PRICE_FEED = '0x0567F2323251f0Aab15c8dFb1967E4e8A7D42aeE'
@@ -37,8 +35,9 @@ const QUOTER_ABI = [
 	'function quoteExactInputSingle((address tokenIn, address tokenOut, uint256 amountIn, uint24 fee, uint160 sqrtPriceLimitX96)) external returns (uint256 amountOut, uint160 sqrtPriceX96After, uint32 initializedTicksCrossed, uint256 gasEstimate)'
 ]
 
+// Smart Router ABI - note: NO deadline parameter (different from V3 SwapRouter)
 const ROUTER_ABI = [
-	'function exactInputSingle((address tokenIn, address tokenOut, uint24 fee, address recipient, uint256 deadline, uint256 amountIn, uint256 amountOutMinimum, uint160 sqrtPriceLimitX96)) external payable returns (uint256 amountOut)'
+	'function exactInputSingle((address tokenIn, address tokenOut, uint24 fee, address recipient, uint256 amountIn, uint256 amountOutMinimum, uint160 sqrtPriceLimitX96)) external payable returns (uint256 amountOut)'
 ]
 
 const CHAINLINK_PRICE_FEED_ABI = [
@@ -349,20 +348,21 @@ class SwapService {
 				console.log('   ✅ Already approved (saved gas!)')
 			}
 
-			// Step 3: Execute V3 swap with deadline
+			// Step 3: Execute V3 swap via Smart Router (no deadline param)
 			console.log('   🔄 Executing V3 swap...')
 
-			const deadline = Math.floor(Date.now() / 1000) + SWAP_DEADLINE_SECONDS
+			// Ensure amounts are BigInt for contract call
+			const amountInBigInt = BigInt(amountIn)
+			const minAmountOutBigInt = minAmountOut ? BigInt(minAmountOut) : 0n
 
 			const swapParams = {
 				tokenIn,
 				tokenOut,
 				fee,
 				recipient: user, // Output goes directly to user!
-				deadline,
-				amountIn,
-				amountOutMinimum: minAmountOut || 0,
-				sqrtPriceLimitX96: 0
+				amountIn: amountInBigInt,
+				amountOutMinimum: minAmountOutBigInt,
+				sqrtPriceLimitX96: 0n
 			}
 
 			const swapTx = await this.router.exactInputSingle(swapParams, {
@@ -671,20 +671,21 @@ class SwapService {
 				console.log('   ✅ Already approved (saved gas!)')
 			}
 
-			// Execute V3 swap with deadline
+			// Execute V3 swap via Smart Router (no deadline param)
 			console.log('   🔄 Executing V3 swap...')
 
-			const deadline = Math.floor(Date.now() / 1000) + SWAP_DEADLINE_SECONDS
+			// Ensure amounts are BigInt for contract call
+			const amountInBigInt = BigInt(amountIn)
+			const minAmountOutBigInt = minAmountOut ? BigInt(minAmountOut) : 0n
 
 			const swapParams = {
 				tokenIn,
 				tokenOut,
 				fee,
 				recipient: user, // Output goes directly to user!
-				deadline,
-				amountIn,
-				amountOutMinimum: minAmountOut || 0,
-				sqrtPriceLimitX96: 0
+				amountIn: amountInBigInt,
+				amountOutMinimum: minAmountOutBigInt,
+				sqrtPriceLimitX96: 0n
 			}
 
 			const swapTx = await this.router.exactInputSingle(swapParams, {
