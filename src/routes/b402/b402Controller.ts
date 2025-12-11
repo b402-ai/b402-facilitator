@@ -24,6 +24,7 @@ import type {
 } from '../../schema/b402'
 import { env } from '../../schema/env'
 import { BaseErrors, handleAndReturnErrorResponse } from '../../schema/errors'
+import { type SwapRequest, getSwapService } from '../../services/swap'
 import type { BatchCall } from '../../types/wallet'
 import { encodeNexusAccountCreation } from '../../utils/nexus'
 import { getUserOpHash, signUserOp } from '../../utils/paymaster'
@@ -1968,6 +1969,400 @@ export async function health(request: FastifyRequest, reply: FastifyReply) {
 		}
 		return response
 	} catch (error) {
+		return handleAndReturnErrorResponse(reply, error)
+	}
+}
+
+// ==========================================
+// Swap Endpoints (PancakeSwap V3)
+// ==========================================
+
+/**
+ * Function for route `/swap/quote`
+ * Get a swap quote from PancakeSwap V3
+ */
+export async function swapQuote(request: FastifyRequest, reply: FastifyReply) {
+	try {
+		const query = request.query as {
+			tokenIn?: string
+			tokenOut?: string
+			amountIn?: string
+			user?: string
+		}
+
+		if (!query.tokenIn || !query.tokenOut || !query.amountIn) {
+			return reply.status(400).send({
+				error: 'Missing required params: tokenIn, tokenOut, amountIn'
+			})
+		}
+
+		const swapService = getSwapService()
+		const quote = await swapService.getQuote(query.tokenIn, query.tokenOut, query.amountIn)
+
+		return quote
+	} catch (error) {
+		console.error('swapQuote error:', error)
+		return reply.status(500).send({
+			error: error instanceof Error ? error.message : 'Failed to get quote'
+		})
+	}
+}
+
+/**
+ * Function for route `/swap/health`
+ * Get swap server status and wallet info
+ */
+export async function swapHealth(_request: FastifyRequest, reply: FastifyReply) {
+	try {
+		const swapService = getSwapService()
+		const health = await swapService.getHealth()
+		return health
+	} catch (error) {
+		console.error('swapHealth error:', error)
+		return reply.status(500).send({ error: 'Failed to get swap health' })
+	}
+}
+
+/**
+ * Function for route `/swap`
+ * Execute a swap with payment verification
+ */
+export async function swap(request: FastifyRequest, reply: FastifyReply) {
+	try {
+		const body = request.body as SwapRequest
+
+		if (!body.user || !body.tokenIn || !body.tokenOut || !body.amountIn || !body.paymentSignature) {
+			return reply.status(400).send({
+				error: 'Missing required fields: user, tokenIn, tokenOut, amountIn, paymentSignature'
+			})
+		}
+
+		console.log('Swap request received:', JSON.stringify(body, null, 2))
+
+		const swapService = getSwapService()
+		const result = await swapService.executeSwap(body)
+
+		if (!result.success) {
+			return reply.status(400).send(result)
+		}
+
+		return result
+	} catch (error) {
+		console.error('swap error:', error)
+		return reply.status(500).send({
+			success: false,
+			error: error instanceof Error ? error.message : 'Swap failed'
+		})
+	}
+}
+
+/**
+ * Function for route `/swap/payment-intent`
+ * Get EIP-712 payload for user to sign
+ */
+export async function swapPaymentIntent(request: FastifyRequest, reply: FastifyReply) {
+	try {
+		const body = request.body as {
+			user: string
+			tokenIn: string
+			amountIn: string
+			gasEstimate?: string
+		}
+
+		if (!body.user || !body.tokenIn || !body.amountIn) {
+			return reply.status(400).send({
+				error: 'Missing required fields: user, tokenIn, amountIn'
+			})
+		}
+
+		const swapService = getSwapService()
+		const paymentIntent = await swapService.getPaymentIntent(
+			body.user,
+			body.tokenIn,
+			body.amountIn,
+			body.gasEstimate
+		)
+
+		return paymentIntent
+	} catch (error) {
+		console.error('swapPaymentIntent error:', error)
+		return reply.status(500).send({ error: 'Failed to create payment intent' })
+	}
+}
+
+/**
+ * Function for route `/swap/gasless-approve`
+ * Execute gasless approval using EIP-2612 permit
+ */
+export async function swapGaslessApprove(request: FastifyRequest, reply: FastifyReply) {
+	try {
+		const body = request.body as {
+			user: string
+			tokenIn: string
+			permitSignature: {
+				v: number
+				r: string
+				s: string
+				deadline: number
+				value: string
+			}
+		}
+
+		if (!body.user || !body.tokenIn || !body.permitSignature) {
+			return reply.status(400).send({
+				error: 'Missing required fields: user, tokenIn, permitSignature'
+			})
+		}
+
+		const swapService = getSwapService()
+		const result = await swapService.gaslessApprove(body.user, body.tokenIn, body.permitSignature)
+
+		return result
+	} catch (error) {
+		console.error('swapGaslessApprove error:', error)
+		return reply.status(500).send({ error: 'Gasless approval failed' })
+	}
+}
+
+// ==========================================
+// Single-Signature Swap Endpoints (Smart Wallet)
+// ==========================================
+
+/**
+ * Function for route `/swap/execute/verify`
+ * Build a UserOp that transfers tokens to swap server for single-signature swap
+ * Returns userOp + quote for user to sign
+ */
+export async function swapExecuteVerify(request: FastifyRequest, reply: FastifyReply) {
+	try {
+		const body = request.body as {
+			walletAddress: string
+			tokenIn: string
+			tokenOut: string
+			amountIn: string // Human-readable, e.g., "10.5"
+			slippage?: number // Optional, defaults to 0.5%
+		}
+
+		if (!body.walletAddress || !body.tokenIn || !body.tokenOut || !body.amountIn) {
+			return reply.status(400).send({
+				error: 'Missing required fields: walletAddress, tokenIn, tokenOut, amountIn'
+			})
+		}
+
+		// Validate wallet address
+		if (!ethers.isAddress(body.walletAddress)) {
+			throw new BaseErrors.ERR_INVALID_ADDRESS()
+		}
+
+		// Validate wallet is deployed
+		const deployed = await isWalletDeployed(body.walletAddress)
+		if (!deployed) {
+			throw new BaseErrors.ERR_WALLET_NOT_DEPLOYED()
+		}
+
+		// Get swap service and server wallet
+		const swapService = getSwapService()
+		const serverWallet = swapService.getServerWalletAddress()
+
+		// Parse amount to wei
+		const amountInWei = ethers.parseUnits(body.amountIn, 18).toString()
+
+		// Get quote from PancakeSwap V3
+		const quote = await swapService.getQuote(body.tokenIn, body.tokenOut, amountInWei)
+
+		// Calculate service fee from env config
+		const serviceFeeAmount = swapService.getServiceFee()
+		const serviceFee = ethers.parseUnits(serviceFeeAmount, 18)
+		const totalTransferAmount = BigInt(amountInWei) + serviceFee
+
+		// Check user's balance
+		const providerService = getProviderService()
+		const provider = providerService.getProvider()
+		const tokenABI = ['function balanceOf(address) view returns (uint256)']
+		const tokenContract = new Contract(body.tokenIn, tokenABI, provider)
+		const userBalance = await tokenContract.balanceOf(body.walletAddress)
+
+		if (userBalance < totalTransferAmount) {
+			return reply.status(400).send({
+				error: `Insufficient balance: have ${ethers.formatUnits(userBalance, 18)} but need ${ethers.formatUnits(totalTransferAmount, 18)} (including ${serviceFeeAmount} service fee)`
+			})
+		}
+
+		// Build the batch calls for the UserOp:
+		// Use batchTransferWithUserOp via B402_RELAYER (required for paymaster validation)
+		// Recipients: serverWallet (gets swap amount) + WALLET_FEE_RECIPIENT (gets service fee)
+		const relayerIface = new ethers.Interface(B402_RELAYER_ABI)
+		const validAfter = Math.floor(Date.now() / 1000) - 3600
+		const validBefore = Math.floor(Date.now() / 1000) + 3600
+		const nonce = ethers.hexlify(ethers.randomBytes(32))
+
+		const recipients = [serverWallet, env.WALLET_FEE_RECIPIENT]
+		const amounts = [BigInt(amountInWei), serviceFee]
+
+		const batchTransferData = relayerIface.encodeFunctionData('batchTransferWithUserOp', [
+			body.tokenIn,
+			recipients,
+			amounts,
+			validAfter,
+			validBefore,
+			nonce
+		])
+
+		// Check if approval is needed for relayer
+		const allowance = await getTokenAllowance(body.walletAddress, body.tokenIn)
+
+		const calls: BatchCall[] = []
+
+		// Add approval if needed
+		if (BigInt(allowance) < totalTransferAmount) {
+			const approveData = new ethers.Interface([
+				'function approve(address spender, uint256 amount) returns (bool)'
+			]).encodeFunctionData('approve', [env.B402_RELAYER_ADDRESS, totalTransferAmount])
+			calls.push({
+				to: body.tokenIn,
+				value: '0',
+				data: approveData
+			})
+		}
+
+		// Add batch transfer call
+		calls.push({
+			to: env.B402_RELAYER_ADDRESS,
+			value: '0',
+			data: batchTransferData
+		})
+
+		// Build UserOp
+		const callData = encodeExecuteBatch(calls)
+		const walletNonce = await getWalletNonce(body.walletAddress)
+
+		const feeData = await provider.getFeeData()
+		const baseGasPrice = feeData.gasPrice || ethers.parseUnits('0.1', 'gwei')
+		const maxFeePerGas = (baseGasPrice * 12n) / 10n
+		const maxPriorityFeePerGas = ethers.parseUnits('0.4', 'gwei')
+
+		const userOp: UserOperation = {
+			sender: body.walletAddress,
+			nonce: ethers.toBeHex(walletNonce),
+			factory: undefined,
+			factoryData: undefined,
+			callData,
+			callGasLimit: ethers.toBeHex(500000),
+			verificationGasLimit: ethers.toBeHex(500000),
+			preVerificationGas: ethers.toBeHex(100000),
+			maxFeePerGas: ethers.toBeHex(maxFeePerGas),
+			maxPriorityFeePerGas: ethers.toBeHex(maxPriorityFeePerGas),
+			paymaster: undefined,
+			paymasterVerificationGasLimit: undefined,
+			paymasterPostOpGasLimit: undefined,
+			paymasterData: undefined,
+			signature: '0x' // Will be filled by user
+		}
+
+		// Add paymaster to sponsor gas (gasless for user!)
+		const chainId = providerService.getChainId()
+		const paymasterData = await signUserOp(userOp, chainId)
+		userOp.paymaster = paymasterData.paymaster
+		userOp.paymasterVerificationGasLimit = paymasterData.paymasterVerificationGasLimit
+		userOp.paymasterPostOpGasLimit = paymasterData.paymasterPostOpGasLimit
+		userOp.paymasterData = paymasterData.paymasterData
+
+		// Compute UserOp hash for signing (must be after paymaster is set)
+		const userOpHash = await getUserOpHash(userOp, env.ENTRY_POINT_ADDRESS, chainId)
+
+		return {
+			isValid: true,
+			userOp,
+			userOpHash,
+			quote: {
+				...quote,
+				serviceFee: serviceFeeAmount,
+				totalTransferAmount: totalTransferAmount.toString()
+			},
+			serverWallet
+		}
+	} catch (error) {
+		console.error('swapExecuteVerify error:', error)
+		return handleAndReturnErrorResponse(reply, error)
+	}
+}
+
+/**
+ * Function for route `/swap/execute/settle`
+ * Submit UserOp to transfer tokens, then execute swap
+ */
+export async function swapExecuteSettle(request: FastifyRequest, reply: FastifyReply) {
+	try {
+		const body = request.body as {
+			userOp: UserOperation
+			signature: string
+			swapParams: {
+				user: string
+				tokenIn: string
+				tokenOut: string
+				amountIn: string
+				minAmountOut: string
+				fee: number
+			}
+		}
+
+		if (!body.userOp || !body.signature || !body.swapParams) {
+			return reply.status(400).send({
+				error: 'Missing required fields: userOp, signature, swapParams'
+			})
+		}
+
+		// Add signature to userOp
+		body.userOp.signature = body.signature
+
+		// Submit UserOp to bundler
+		console.log('📤 Submitting UserOp to transfer tokens to swap server...')
+		let userOpHash: string
+		try {
+			userOpHash = await submitUserOpToBundler(body.userOp)
+		} catch (error) {
+			console.error('Bundler submission failed:', error)
+			throw new BaseErrors.ERR_BUNDLER_SUBMISSION_FAILED()
+		}
+
+		// Wait for UserOp confirmation
+		console.log(`⏳ Waiting for UserOp ${userOpHash} confirmation...`)
+		let txHash = ''
+		let confirmed = false
+		for (let i = 0; i < 30; i++) {
+			await new Promise((resolve) => setTimeout(resolve, 2000))
+			try {
+				const receipt = await getUserOpReceipt(userOpHash)
+				if (receipt.success) {
+					txHash = receipt.txHash
+					confirmed = true
+					console.log(`✅ UserOp confirmed: ${txHash}`)
+					break
+				}
+			} catch {
+				// Continue polling
+			}
+		}
+
+		if (!confirmed) {
+			throw new BaseErrors.ERR_TRANSACTION_CONFIRMATION_FAILED()
+		}
+
+		// Now execute the swap (tokens should be in server wallet)
+		console.log('🔄 Executing swap...')
+		const swapService = getSwapService()
+		const swapResult = await swapService.executeSwapFromTransfer(body.swapParams)
+
+		return {
+			success: swapResult.success,
+			transferTxHash: txHash,
+			swapTxHash: swapResult.txHash,
+			explorerUrl: swapResult.explorerUrl,
+			error: swapResult.error,
+			stats: swapResult.stats
+		}
+	} catch (error) {
+		console.error('swapExecuteSettle error:', error)
 		return handleAndReturnErrorResponse(reply, error)
 	}
 }

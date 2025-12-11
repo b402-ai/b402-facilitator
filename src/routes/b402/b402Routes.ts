@@ -30,6 +30,13 @@ import {
 	settleDeploymentByEOA,
 	settleDeploymentBySmartWallet,
 	settleWalletPayment,
+	swap,
+	swapExecuteSettle,
+	swapExecuteVerify,
+	swapGaslessApprove,
+	swapHealth,
+	swapPaymentIntent,
+	swapQuote,
 	verify,
 	verifyDeploymentByEOA,
 	verifyDeploymentBySmartWallet,
@@ -196,6 +203,35 @@ export const register = (server: FastifyInstance, _: any, next: any) => {
 		},
 		health
 	)
+
+	// ==========================================
+	// Swap Endpoints (PancakeSwap V3)
+	// ==========================================
+
+	// Get swap quote
+	server.get('/swap/quote', swapQuote)
+
+	// Get swap service health
+	server.get('/swap/health', swapHealth)
+
+	// Execute swap
+	server.post('/swap', swap)
+
+	// Get payment intent for signing
+	server.post('/swap/payment-intent', swapPaymentIntent)
+
+	// Gasless approval via EIP-2612 permit
+	server.post('/swap/gasless-approve', swapGaslessApprove)
+
+	// ==========================================
+	// Single-Signature Swap (Smart Wallet UserOp)
+	// ==========================================
+
+	// Build UserOp for single-sig swap
+	server.post('/swap/execute/verify', swapExecuteVerify)
+
+	// Execute single-sig swap (submit UserOp + swap)
+	server.post('/swap/execute/settle', swapExecuteSettle)
 
 	next()
 }
