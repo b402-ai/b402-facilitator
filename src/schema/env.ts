@@ -26,6 +26,9 @@ interface IEnvSchema {
 	WALLET_DEPLOYMENT_FEE: string
 	WALLET_FEE_RECIPIENT: string
 
+	// Swap service configuration
+	SWAP_SERVICE_FEE: string
+
 	// Nexus Smart Account Configuration (ERC-7579)
 	NEXUS_ACCOUNT_FACTORY_ADDRESS: string
 	NEXUS_BOOTSTRAP_ADDRESS: string
@@ -84,6 +87,8 @@ export const envSchema: JSONSchemaType<IEnvSchema> = {
 		WALLET_DEPLOYMENT_FEE: { type: 'string' },
 		WALLET_FEE_RECIPIENT: { type: 'string' },
 
+		SWAP_SERVICE_FEE: { type: 'string', default: '0.01' },
+
 		NEXUS_ACCOUNT_FACTORY_ADDRESS: { type: 'string' },
 		NEXUS_BOOTSTRAP_ADDRESS: { type: 'string' },
 		K1_VALIDATOR_ADDRESS: { type: 'string' },
@@ -135,6 +140,7 @@ function getEnv(): IEnvSchema {
 		WALLET_PAYMENT_FEE: process.env.WALLET_PAYMENT_FEE as string,
 		WALLET_DEPLOYMENT_FEE: process.env.WALLET_DEPLOYMENT_FEE as string,
 		WALLET_FEE_RECIPIENT: process.env.WALLET_FEE_RECIPIENT as string,
+		SWAP_SERVICE_FEE: process.env.SWAP_SERVICE_FEE || '0.01',
 		NEXUS_ACCOUNT_FACTORY_ADDRESS: process.env.NEXUS_ACCOUNT_FACTORY_ADDRESS as string,
 		NEXUS_BOOTSTRAP_ADDRESS: process.env.NEXUS_BOOTSTRAP_ADDRESS as string,
 		K1_VALIDATOR_ADDRESS: process.env.K1_VALIDATOR_ADDRESS as string,
