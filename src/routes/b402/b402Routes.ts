@@ -22,10 +22,6 @@ import {
 	VerifyWalletPaymentResponseSchema
 } from '../../schema/b402'
 import {
-	SwapExecuteSettleRequestSchema,
-	SwapExecuteSettleResponseSchema,
-	SwapExecuteVerifyRequestSchema,
-	SwapExecuteVerifyResponseSchema,
 	SwapGaslessApproveRequestSchema,
 	SwapGaslessApproveResponseSchema,
 	SwapHealthResponseSchema,
@@ -34,7 +30,11 @@ import {
 	SwapQuoteQuerySchema,
 	SwapQuoteResponseSchema,
 	SwapRequestSchema,
-	SwapResponseSchema
+	SwapResponseSchema,
+	SwapWalletSettleRequestSchema,
+	SwapWalletSettleResponseSchema,
+	SwapWalletVerifyRequestSchema,
+	SwapWalletVerifyResponseSchema
 } from '../../schema/swap'
 import {
 	claimWalletDeployment,
@@ -46,12 +46,12 @@ import {
 	settleDeploymentBySmartWallet,
 	settleWalletPayment,
 	swap,
-	swapExecuteSettle,
-	swapExecuteVerify,
 	swapGaslessApprove,
 	swapHealth,
 	swapPaymentIntent,
 	swapQuote,
+	swapWalletSettle,
+	swapWalletVerify,
 	verify,
 	verifyDeploymentByEOA,
 	verifyDeploymentBySmartWallet,
@@ -274,25 +274,25 @@ export const register = (server: FastifyInstance, _: any, next: any) => {
 	)
 
 	server.post(
-		'/swap/execute/verify',
+		'/swap/wallet/verify',
 		{
 			schema: {
-				body: SwapExecuteVerifyRequestSchema,
-				response: { 200: SwapExecuteVerifyResponseSchema }
+				body: SwapWalletVerifyRequestSchema,
+				response: { 200: SwapWalletVerifyResponseSchema }
 			}
 		},
-		swapExecuteVerify
+		swapWalletVerify
 	)
 
 	server.post(
-		'/swap/execute/settle',
+		'/swap/wallet/settle',
 		{
 			schema: {
-				body: SwapExecuteSettleRequestSchema,
-				response: { 200: SwapExecuteSettleResponseSchema }
+				body: SwapWalletSettleRequestSchema,
+				response: { 200: SwapWalletSettleResponseSchema }
 			}
 		},
-		swapExecuteSettle
+		swapWalletSettle
 	)
 
 	next()

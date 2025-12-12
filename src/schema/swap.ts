@@ -172,8 +172,8 @@ const UserOperationSchema = {
 	required: ['sender', 'nonce', 'callData']
 } as const
 
-// POST /swap/execute/verify - Request
-export const SwapExecuteVerifyRequestSchema = {
+// POST /swap/wallet/verify - Request
+export const SwapWalletVerifyRequestSchema = {
 	type: 'object',
 	properties: {
 		walletAddress: { type: 'string' },
@@ -184,8 +184,8 @@ export const SwapExecuteVerifyRequestSchema = {
 	required: ['walletAddress', 'tokenIn', 'tokenOut', 'amountIn']
 } as const
 
-// POST /swap/execute/verify - Response
-export const SwapExecuteVerifyResponseSchema = {
+// POST /swap/wallet/verify - Response
+export const SwapWalletVerifyResponseSchema = {
 	type: 'object',
 	properties: {
 		isValid: { type: 'boolean' },
@@ -198,7 +198,7 @@ export const SwapExecuteVerifyResponseSchema = {
 	required: ['isValid']
 } as const
 
-// Swap params for execute/settle
+// Swap params for wallet/settle
 const SwapParamsSchema = {
 	type: 'object',
 	properties: {
@@ -212,8 +212,8 @@ const SwapParamsSchema = {
 	required: ['user', 'tokenIn', 'tokenOut', 'amountIn', 'minAmountOut']
 } as const
 
-// POST /swap/execute/settle - Request
-export const SwapExecuteSettleRequestSchema = {
+// POST /swap/wallet/settle - Request
+export const SwapWalletSettleRequestSchema = {
 	type: 'object',
 	properties: {
 		userOp: UserOperationSchema,
@@ -223,8 +223,8 @@ export const SwapExecuteSettleRequestSchema = {
 	required: ['userOp', 'signature', 'swapParams']
 } as const
 
-// POST /swap/execute/settle - Response
-export const SwapExecuteSettleResponseSchema = {
+// POST /swap/wallet/settle - Response
+export const SwapWalletSettleResponseSchema = {
 	type: 'object',
 	properties: {
 		success: { type: 'boolean' },
@@ -261,14 +261,14 @@ export type SwapGaslessApproveRequest = {
 	s: string
 }
 
-export type SwapExecuteVerifyRequest = {
+export type SwapWalletVerifyRequest = {
 	walletAddress: string
 	tokenIn: string
 	tokenOut: string
 	amountIn: string
 }
 
-export type SwapExecuteSettleRequest = {
+export type SwapWalletSettleRequest = {
 	userOp: {
 		sender: string
 		nonce: string

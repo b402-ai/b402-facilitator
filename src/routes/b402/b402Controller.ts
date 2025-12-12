@@ -1973,13 +1973,31 @@ export async function health(request: FastifyRequest, reply: FastifyReply) {
 	}
 }
 
-// ==========================================
-// Swap Endpoints (PancakeSwap V3)
-// ==========================================
+/**
+ * Function for route `/swap/health`
+ * Health check endpoint for swap service
+ *
+ * @param _request
+ * @param reply
+ * @returns
+ */
+export async function swapHealth(_request: FastifyRequest, reply: FastifyReply) {
+	try {
+		const swapService = getSwapService()
+		const health = await swapService.getHealth()
+		return health
+	} catch (error) {
+		return handleAndReturnErrorResponse(reply, error)
+	}
+}
 
 /**
  * Function for route `/swap/quote`
  * Get a swap quote from PancakeSwap V3
+ *
+ * @param request
+ * @param reply
+ * @returns
  */
 export async function swapQuote(request: FastifyRequest, reply: FastifyReply) {
 	try {
@@ -1991,9 +2009,7 @@ export async function swapQuote(request: FastifyRequest, reply: FastifyReply) {
 		}
 
 		if (!query.tokenIn || !query.tokenOut || !query.amountIn) {
-			return reply.status(400).send({
-				error: 'Missing required params: tokenIn, tokenOut, amountIn'
-			})
+			throw new BaseErrors.ERR_SWAP_MISSING_PARAMS()
 		}
 
 		const swapService = getSwapService()
@@ -2001,62 +2017,46 @@ export async function swapQuote(request: FastifyRequest, reply: FastifyReply) {
 
 		return quote
 	} catch (error) {
-		console.error('swapQuote error:', error)
-		return reply.status(500).send({
-			error: error instanceof Error ? error.message : 'Failed to get quote'
-		})
-	}
-}
-
-/**
- * Function for route `/swap/health`
- * Get swap server status and wallet info
- */
-export async function swapHealth(_request: FastifyRequest, reply: FastifyReply) {
-	try {
-		const swapService = getSwapService()
-		const health = await swapService.getHealth()
-		return health
-	} catch (error) {
-		console.error('swapHealth error:', error)
-		return reply.status(500).send({ error: 'Failed to get swap health' })
+		return handleAndReturnErrorResponse(reply, error)
 	}
 }
 
 /**
  * Function for route `/swap`
  * Execute a swap with payment verification
+ *
+ * @param request
+ * @param reply
+ * @returns
  */
 export async function swap(request: FastifyRequest, reply: FastifyReply) {
 	try {
 		const body = request.body as SwapRequest
 
 		if (!body.user || !body.tokenIn || !body.tokenOut || !body.amountIn || !body.paymentSignature) {
-			return reply.status(400).send({
-				error: 'Missing required fields: user, tokenIn, tokenOut, amountIn, paymentSignature'
-			})
+			throw new BaseErrors.ERR_SWAP_MISSING_PARAMS()
 		}
 
 		const swapService = getSwapService()
 		const result = await swapService.executeSwap(body)
 
 		if (!result.success) {
-			return reply.status(400).send(result)
+			throw new BaseErrors.ERR_SWAP_EXECUTION_FAILED()
 		}
 
 		return result
 	} catch (error) {
-		console.error('swap error:', error)
-		return reply.status(500).send({
-			success: false,
-			error: error instanceof Error ? error.message : 'Swap failed'
-		})
+		return handleAndReturnErrorResponse(reply, error)
 	}
 }
 
 /**
  * Function for route `/swap/payment-intent`
  * Get EIP-712 payload for user to sign
+ *
+ * @param request
+ * @param reply
+ * @returns
  */
 export async function swapPaymentIntent(request: FastifyRequest, reply: FastifyReply) {
 	try {
@@ -2068,9 +2068,7 @@ export async function swapPaymentIntent(request: FastifyRequest, reply: FastifyR
 		}
 
 		if (!body.user || !body.tokenIn || !body.amountIn) {
-			return reply.status(400).send({
-				error: 'Missing required fields: user, tokenIn, amountIn'
-			})
+			throw new BaseErrors.ERR_SWAP_MISSING_PARAMS()
 		}
 
 		const swapService = getSwapService()
@@ -2083,14 +2081,17 @@ export async function swapPaymentIntent(request: FastifyRequest, reply: FastifyR
 
 		return paymentIntent
 	} catch (error) {
-		console.error('swapPaymentIntent error:', error)
-		return reply.status(500).send({ error: 'Failed to create payment intent' })
+		return handleAndReturnErrorResponse(reply, error)
 	}
 }
 
 /**
  * Function for route `/swap/gasless-approve`
  * Execute gasless approval using EIP-2612 permit
+ *
+ * @param request
+ * @param reply
+ * @returns
  */
 export async function swapGaslessApprove(request: FastifyRequest, reply: FastifyReply) {
 	try {
@@ -2107,9 +2108,7 @@ export async function swapGaslessApprove(request: FastifyRequest, reply: Fastify
 		}
 
 		if (!body.user || !body.tokenIn || !body.permitSignature) {
-			return reply.status(400).send({
-				error: 'Missing required fields: user, tokenIn, permitSignature'
-			})
+			throw new BaseErrors.ERR_SWAP_MISSING_PARAMS()
 		}
 
 		const swapService = getSwapService()
@@ -2117,21 +2116,20 @@ export async function swapGaslessApprove(request: FastifyRequest, reply: Fastify
 
 		return result
 	} catch (error) {
-		console.error('swapGaslessApprove error:', error)
-		return reply.status(500).send({ error: 'Gasless approval failed' })
+		return handleAndReturnErrorResponse(reply, error)
 	}
 }
 
-// ==========================================
-// Single-Signature Swap Endpoints (Smart Wallet)
-// ==========================================
-
 /**
- * Function for route `/swap/execute/verify`
+ * Function for route `/swap/wallet/verify`
  * Build a UserOp that transfers tokens to swap server for single-signature swap
  * Returns userOp + quote for user to sign
+ *
+ * @param request
+ * @param reply
+ * @returns
  */
-export async function swapExecuteVerify(request: FastifyRequest, reply: FastifyReply) {
+export async function swapWalletVerify(request: FastifyRequest, reply: FastifyReply) {
 	try {
 		const body = request.body as {
 			walletAddress: string
@@ -2286,10 +2284,14 @@ export async function swapExecuteVerify(request: FastifyRequest, reply: FastifyR
 }
 
 /**
- * Function for route `/swap/execute/settle`
+ * Function for route `/swap/wallet/settle`
  * Submit UserOp to transfer tokens, then execute swap
+ *
+ * @param request
+ * @param reply
+ * @returns
  */
-export async function swapExecuteSettle(request: FastifyRequest, reply: FastifyReply) {
+export async function swapWalletSettle(request: FastifyRequest, reply: FastifyReply) {
 	try {
 		const body = request.body as {
 			userOp: UserOperation
