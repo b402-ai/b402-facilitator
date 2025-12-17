@@ -157,6 +157,8 @@ export async function getPrivacyBalance(config: GetBalanceConfig): Promise<Priva
 				.toString(16)
 				.padStart(64, '0')}`
 
+			console.log('nullifier: ', nullifier)
+
 			// Skip if already processed
 			if (processedNullifiers.has(nullifier.toLowerCase())) {
 				continue

@@ -81,6 +81,22 @@ export function getMasterWalletSalt(ownerAddress: string): bigint {
 }
 
 /**
+ * Derive a deterministic unshield EOA from a shield EOA private key
+ * Formula: keccak256(privateKey + "b402-unshield")
+ *
+ * @param eoaPrivateKey - The shield EOA private key
+ * @returns A deterministic EOA wallet for unshield operations
+ */
+export function deriveUnshieldEOA(eoaPrivateKey: string): ethers.Wallet {
+	// Hash the private key with a constant salt to derive a new private key
+	const derivedPrivateKey = ethers.keccak256(
+		ethers.concat([eoaPrivateKey, ethers.toUtf8Bytes('b402-unshield')])
+	)
+
+	return new ethers.Wallet(derivedPrivateKey)
+}
+
+/**
  * Compute the deterministic b402 master wallet address for a given owner
  * Uses a cache store
  *

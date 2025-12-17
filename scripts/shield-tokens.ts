@@ -32,7 +32,7 @@ interface ShieldConfig {
 	amount: bigint
 	railgunSmartWalletAddress: string
 	rpcUrl: string
-	apiUrl: string // B402 Backend API URL for privacy operations
+	apiUrl: string // b402-backend API URL
 	gasLimit?: bigint
 	gasPrice?: bigint
 }
@@ -47,7 +47,7 @@ const CONFIG: ShieldConfig = {
 	amount: ethers.parseUnits('0.01', 18),
 	railgunSmartWalletAddress: '0x590162bf4b50f6576a459b75309ee21d92178a10',
 	rpcUrl: process.env.BSC_RPC_URL || '',
-	apiUrl: 'http://localhost:3000', // B402 Backend API URL (edit this)
+	apiUrl: 'http://localhost:3000',
 	gasLimit: 500000n
 }
 // ---------------------------
@@ -125,7 +125,7 @@ async function shieldTokens(config: ShieldConfig) {
 	const creationBlockNumbers = { [NetworkName.BNBChain]: 70253312 }
 	const walletInfo = await createRailgunWallet(encryptionKey, mnemonic, creationBlockNumbers)
 
-	console.log('Railgun Address (zk-address):', walletInfo.railgunAddress)
+	console.log('Railgun Address (zk-address): ', walletInfo.railgunAddress)
 	console.log('Mnemonic: ', mnemonic)
 
 	const tokenContract = new Contract(config.token.address, ERC20_ABI, provider)
@@ -215,7 +215,7 @@ async function shieldTokens(config: ShieldConfig) {
 		mnemonic: mnemonic
 	}
 
-	// Check balance AFTER shielding
+	// Check balance after shielding
 	console.log('\n=== BALANCE AFTER SHIELDING ===')
 	console.log('Waiting 10 seconds for indexer to sync...')
 	await new Promise((resolve) => setTimeout(resolve, 10000))

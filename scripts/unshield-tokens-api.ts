@@ -1,20 +1,38 @@
 import type { Chain } from '@railgun-community/engine/dist/models/engine-types'
-import { NetworkName, TXIDVersion } from '@railgun-community/shared-models'
-import type { SelectedBroadcaster } from '@railgun-community/waku-broadcaster-client-node'
 import {
-	WakuBroadcasterClient,
+	EVMGasType,
+	type FallbackProviderJsonConfig,
+	NetworkName,
+	type RailgunERC20Amount,
+	type RailgunERC20AmountRecipient,
+	type SelectedBroadcaster,
+	TXIDVersion,
+	type TransactionGasDetailsType0
+} from '@railgun-community/shared-models'
+import {
+	BroadcasterTransaction,
+	WakuBroadcasterClient
+} from '@railgun-community/waku-broadcaster-client-node'
+import {
+	calculateBroadcasterFeeERC20Amount,
 	createRailgunWallet,
+	generateUnshieldProof,
+	getEngine,
 	loadProvider,
+	populateProvedUnshield,
 	setOnBalanceUpdateCallback,
 	setOnUTXOMerkletreeScanCallback,
 	startRailgunEngine,
 	stopRailgunEngine
 } from '@railgun-community/wallet'
+import 'dotenv/config'
 import { ethers } from 'ethers'
 import { MemoryLevel } from 'memory-level'
+import * as snarkjs from 'snarkjs'
 
+import { computeMasterWalletAddress, deriveUnshieldEOA } from '../src/utils/wallet'
 import { getPrivacyBalance } from './utils/balance'
-import { deriveMnemonicFromEOA } from './utils/railgun'
+import { createFileBasedArtifactStore, deriveMnemonicFromEOA } from './utils/railgun'
 import { fetchSpendableUTXOs } from './utils/unshield-api'
 
 interface UnshieldConfig {
@@ -31,15 +49,15 @@ interface UnshieldConfig {
 }
 
 const CONFIG: UnshieldConfig = {
-	mode: 'broadcaster',
-	eoaPrivateKey: process.env.EOA_PRIVATE_KEY || '',
-	rpcUrl: process.env.BNB_RPC_URL || 'https://bsc-dataseed1.binance.org',
-	apiUrl: process.env.API_URL || 'http://localhost:3000',
+	mode: 'eoa',
+	eoaPrivateKey: '',
+	rpcUrl: process.env.BSC_RPC_URL || 'https://bsc-dataseed1.binance.org',
+	apiUrl: process.env.API_URL || 'http://localhost:3002',
 	token: {
 		address: '0x55d398326f99059fF775485246999027B3197955',
 		decimals: 18
 	},
-	amount: ethers.parseUnits('1', 18),
+	amount: ethers.parseUnits('0.01', 18),
 	recipientAddress: ''
 }
 
@@ -55,10 +73,16 @@ async function unshieldTokensAPI(config: UnshieldConfig) {
 	}
 
 	const eoaWallet = new ethers.Wallet(config.eoaPrivateKey)
-	config.recipientAddress = eoaWallet.address
+
+	// Derive deterministic unshield EOA and compute smart wallet address
+	const unshieldEOA = deriveUnshieldEOA(config.eoaPrivateKey)
+	const smartWalletAddress = await computeMasterWalletAddress(unshieldEOA.address)
+	config.recipientAddress = smartWalletAddress
 
 	console.log('=== B402 API-FIRST UNSHIELD ===')
-	console.log('EOA Address:', config.recipientAddress)
+	console.log('Shield EOA Address:', eoaWallet.address)
+	console.log('Derived Unshield EOA:', unshieldEOA.address)
+	console.log('Unshield Recipient (Smart Wallet):', config.recipientAddress)
 	console.log('Mode:', config.mode.toUpperCase())
 	console.log('API URL:', config.apiUrl)
 	console.log('\nNOTE: This uses B402 API for all data operations - no blockchain scanning\n')
@@ -84,11 +108,10 @@ async function unshieldTokensAPI(config: UnshieldConfig) {
 	const db = new MemoryLevel()
 	const walletSource = 'b402unshield-api'
 	const encryptionKey = 'b402-encryption-key-0x01'
+	const artifactsDir = '.railgun-artifacts'
+	const artifactStore = createFileBasedArtifactStore(artifactsDir)
 
-	const artifactStore = {
-		rootDir: '.railgun-artifacts',
-		downloadTimeoutInMs: 300000
-	}
+	console.log('Using artifacts directory:', artifactsDir)
 
 	setOnBalanceUpdateCallback(() => {})
 	setOnUTXOMerkletreeScanCallback(() => {})
@@ -99,7 +122,7 @@ async function unshieldTokensAPI(config: UnshieldConfig) {
 		false,
 		artifactStore,
 		false,
-		true,
+		true, // skipMerkletreeScans
 		['https://ppoi-agg.horsewithsixlegs.xyz'],
 		[],
 		false
@@ -107,20 +130,34 @@ async function unshieldTokensAPI(config: UnshieldConfig) {
 
 	console.log('Railgun engine started (merkle tree scanning skipped)')
 
+	// Configure snarkjs as the prover
+	const engine = getEngine()
+	engine.prover.setSnarkJSGroth16(snarkjs.groth16)
+	console.log('Configured snarkjs as the ZK prover')
+
 	const mnemonic = await deriveMnemonicFromEOA(config.eoaPrivateKey)
 	const chain: Chain = { type: 0, id: 56 }
 
-	await loadProvider(provider, NetworkName.BNBChain)
+	// Configure network provider
+	const networkConfig: FallbackProviderJsonConfig = {
+		chainId: 56,
+		providers: [
+			{
+				provider: config.rpcUrl,
+				priority: 1,
+				weight: 1,
+				stallTimeout: 2500
+			}
+		]
+	}
 
-	const walletInfo = await createRailgunWallet(
-		encryptionKey,
-		mnemonic,
-		0,
-		undefined,
-		TXIDVersion.V2_PoseidonMerkle
-	)
+	await loadProvider(networkConfig, NetworkName.BNBChain, 60000)
+
+	const creationBlockNumbers = { [NetworkName.BNBChain]: 0 } // 0 = no historical scanning
+	const walletInfo = await createRailgunWallet(encryptionKey, mnemonic, creationBlockNumbers)
 
 	console.log('Wallet ID:', walletInfo.id)
+	console.log('RAILGUN Address (zk-address):', walletInfo.railgunAddress)
 
 	let selectedBroadcaster: SelectedBroadcaster | undefined
 
@@ -131,7 +168,11 @@ async function unshieldTokensAPI(config: UnshieldConfig) {
 
 		await WakuBroadcasterClient.start(
 			chain,
-			{ peerDiscoveryTimeout: 30000 },
+			{
+				trustedFeeSigner:
+					'0zk1qyv0zc0j9sm6mr8fe3gx7ymwc6d2xymfftqvgvjdy3r8dmyfs947lrv7j6fe3z53llx97s6mxjstvn9wj3xhyv4cfecw08gqzywgnl0fmzx3mguhr2hyych4srf',
+				peerDiscoveryTimeout: 30000
+			},
 			(status) => console.log('Broadcaster status:', status),
 			undefined
 		)
@@ -198,7 +239,8 @@ async function unshieldTokensAPI(config: UnshieldConfig) {
 	console.log('Gas price:', ethers.formatUnits(gasPrice, 'gwei'), 'gwei')
 	console.log('Estimated gas:', estimatedGas.toString())
 
-	let broadcasterFeeAmount = 0n
+	// Calculate broadcaster fee (only if in broadcaster mode)
+	let broadcasterFeeRecipient: RailgunERC20AmountRecipient | undefined
 
 	if (config.mode === 'broadcaster') {
 		console.log('\n=== FINDING BROADCASTER ===')
@@ -217,42 +259,164 @@ async function unshieldTokensAPI(config: UnshieldConfig) {
 		console.log('  Fee per unit gas:', selectedBroadcaster.tokenFee.feePerUnitGas)
 		console.log('  Reliability:', selectedBroadcaster.tokenFee.reliability)
 
-		broadcasterFeeAmount = BigInt(selectedBroadcaster.tokenFee.feePerUnitGas) * estimatedGas
-		console.log('Broadcaster fee:', ethers.formatUnits(broadcasterFeeAmount, decimals), symbol)
+		const broadcasterFeeERC20Amount: RailgunERC20Amount = calculateBroadcasterFeeERC20Amount(
+			{
+				tokenAddress: config.token.address,
+				feePerUnitGas: BigInt(selectedBroadcaster.tokenFee.feePerUnitGas)
+			},
+			{
+				evmGasType: EVMGasType.Type0,
+				gasEstimate: estimatedGas,
+				gasPrice: gasPrice
+			}
+		)
+
+		broadcasterFeeRecipient = {
+			...broadcasterFeeERC20Amount,
+			recipientAddress: selectedBroadcaster.railgunAddress
+		}
+
+		console.log(
+			'Broadcaster fee:',
+			ethers.formatUnits(broadcasterFeeERC20Amount.amount, decimals),
+			symbol
+		)
 	}
 
-	const totalOut = config.amount + broadcasterFeeAmount
-	const changeAmount = selectedTotal - totalOut
+	console.log('\n=== BUILDING UNSHIELD TRANSACTION ===')
 
-	console.log('\n=== TRANSACTION BREAKDOWN ===')
-	console.log('Spending:', ethers.formatUnits(selectedTotal, decimals))
-	console.log('To recipient:', ethers.formatUnits(config.amount, decimals))
-	if (broadcasterFeeAmount > 0n) {
-		console.log('Broadcaster fee:', ethers.formatUnits(broadcasterFeeAmount, decimals))
+	const erc20AmountRecipients: RailgunERC20AmountRecipient[] = [
+		{
+			tokenAddress: config.token.address,
+			amount: config.amount,
+			recipientAddress: config.recipientAddress
+		}
+	]
+
+	// Prompt user to continue
+	console.log('\n=== READY TO UNSHIELD ===')
+	console.log('Review the information above.')
+	console.log('Press ENTER to continue with proof generation and unshield, or Ctrl+C to cancel...')
+
+	await new Promise<void>((resolve) => {
+		process.stdin.once('data', () => {
+			resolve()
+		})
+	})
+
+	// Generate proof (this takes time!)
+	console.log('\nGenerating zero-knowledge proof (this may take 10-30 seconds)...')
+	const proofStartTime = Date.now()
+
+	const sendWithPublicWallet = config.mode === 'eoa'
+
+	await generateUnshieldProof(
+		TXIDVersion.V2_PoseidonMerkle,
+		NetworkName.BNBChain,
+		walletInfo.id,
+		encryptionKey,
+		erc20AmountRecipients,
+		[],
+		broadcasterFeeRecipient, // Broadcaster fee (undefined in eoa mode)
+		sendWithPublicWallet, // true for eoa mode, false for broadcaster mode
+		gasPrice, // overallBatchMinGasPrice
+		() => console.log('Proof generation in progress...')
+	)
+
+	const proofTime = ((Date.now() - proofStartTime) / 1000).toFixed(2)
+	console.log(`Proof generated in ${proofTime}s`)
+
+	// Populate transaction with proof
+	console.log('\nPopulating unshield transaction...')
+
+	// Create proper gas details with BigInt values (Type0 for BSC)
+	const gasDetails: TransactionGasDetailsType0 = {
+		evmGasType: EVMGasType.Type0,
+		gasEstimate: estimatedGas,
+		gasPrice: gasPrice
 	}
-	if (changeAmount > 0n) {
-		console.log('Change (back to private):', ethers.formatUnits(changeAmount, decimals))
+
+	const populateResponse = await populateProvedUnshield(
+		TXIDVersion.V2_PoseidonMerkle,
+		NetworkName.BNBChain,
+		walletInfo.id,
+		erc20AmountRecipients,
+		[],
+		broadcasterFeeRecipient, // Broadcaster fee (undefined in eoa mode)
+		sendWithPublicWallet, // true for eoa mode, false for broadcaster mode
+		gasPrice, // overallBatchMinGasPrice
+		gasDetails
+	)
+
+	console.log(`Transaction populated with ${populateResponse.nullifiers?.length || 0} nullifiers`)
+
+	// Send transaction (method depends on mode)
+	let txHash: string
+
+	if (config.mode === 'broadcaster') {
+		// Send via broadcaster
+		console.log('\nSending transaction through Waku broadcaster network...')
+
+		if (!selectedBroadcaster) {
+			throw new Error('No broadcaster selected')
+		}
+
+		if (!populateResponse.nullifiers || populateResponse.nullifiers.length === 0) {
+			throw new Error('No nullifiers returned from populateProvedUnshield')
+		}
+
+		const broadcasterTransaction = await BroadcasterTransaction.create(
+			TXIDVersion.V2_PoseidonMerkle, // txidVersionForInputs
+			populateResponse.transaction.to!,
+			populateResponse.transaction.data!,
+			selectedBroadcaster.railgunAddress,
+			selectedBroadcaster.tokenFee.feesID,
+			chain,
+			populateResponse.nullifiers,
+			gasPrice, // overallBatchMinGasPrice
+			false, // useRelayAdapt
+			populateResponse.preTransactionPOIsPerTxidLeafPerList // POI proofs
+		)
+
+		txHash = await broadcasterTransaction.send()
+		console.log('Transaction broadcasted! Hash:', txHash)
+	} else {
+		// Send via EOA directly
+		console.log('\nSending transaction directly from EOA...')
+
+		const wallet = new ethers.Wallet(config.eoaPrivateKey, provider)
+		const tx = await wallet.sendTransaction(populateResponse.transaction)
+		txHash = tx.hash
+		console.log('Transaction sent! Hash:', txHash)
 	}
 
-	console.log('\n=== IMPLEMENTATION STATUS ===')
-	console.log('Completed:')
-	console.log('  - API data fetching')
-	console.log('  - UTXO decryption')
-	console.log('  - Merkle proof fetching')
-	console.log('  - UTXO selection')
-	console.log('\nRemaining:')
-	console.log('  - Transaction construction')
-	console.log('  - Proof generation')
-	console.log('  - Transaction submission')
+	// Wait for confirmation
+	console.log('Waiting for confirmation...')
+	const receipt = await provider.waitForTransaction(txHash)
+	console.log('Confirmed in block:', receipt?.blockNumber)
 
+	// Cleanup
 	if (config.mode === 'broadcaster') {
 		WakuBroadcasterClient.stop()
 	}
 	await stopRailgunEngine()
 
-	console.log('\n=== PARTIAL IMPLEMENTATION COMPLETE ===')
-	console.log('This demonstrates the API-first approach for fetching and processing UTXOs')
-	console.log('Full proof generation and submission will be implemented next')
+	// Check balance AFTER unshielding
+	console.log('\n=== BALANCE AFTER UNSHIELDING ===')
+	console.log('Waiting 10 seconds for indexer to sync...')
+	await new Promise((resolve) => setTimeout(resolve, 10000))
+
+	try {
+		const balanceAfter = await getPrivacyBalance({
+			eoaPrivateKey: config.eoaPrivateKey,
+			rpcUrl: config.rpcUrl,
+			apiUrl: config.apiUrl,
+			tokenAddresses: [config.token.address]
+		})
+		console.log(balanceAfter.summary)
+	} catch (error) {
+		console.warn('Could not fetch balance after unshielding:', error)
+	}
 }
 
 unshieldTokensAPI(CONFIG).catch((error) => {
