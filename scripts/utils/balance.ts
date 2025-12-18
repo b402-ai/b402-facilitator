@@ -8,11 +8,12 @@ import type { ViewingKeyPair } from '@railgun-community/engine/dist/key-derivati
 import type { Chain } from '@railgun-community/engine/dist/models/engine-types'
 import type { TokenData } from '@railgun-community/engine/dist/models/formatted-types'
 import { TXIDVersion } from '@railgun-community/engine/dist/models/poi-types'
+import { ShieldNote } from '@railgun-community/engine/dist/note/shield-note'
 import { TransactNote } from '@railgun-community/engine/dist/note/transact-note'
 import { getSharedSymmetricKey } from '@railgun-community/engine/dist/utils/keys-utils'
 import { ethers } from 'ethers'
 
-import type { OutputCommitment } from './api'
+import type { OutputCommitment, ShieldCommitment } from './api'
 import { fetchCommitmentsByEOA, fetchNullifierDataBatched } from './api'
 import { deriveMnemonicFromEOA } from './railgun'
 
@@ -64,6 +65,44 @@ class SimpleTokenDataGetter {
 }
 
 /**
+ * Verifies a shield commitment belongs to you by attempting to decrypt it
+ * Returns true if the shield can be decrypted with your viewing key and NPK matches
+ */
+async function verifyShieldOwnership(
+	shield: ShieldCommitment,
+	viewingKeyPair: ViewingKeyPair,
+	addressData: AddressData
+): Promise<boolean> {
+	try {
+		// Compute shared key using shieldKey
+		const shieldKeyBuffer = Buffer.from(shield.shieldKey.replace('0x', ''), 'hex')
+		const sharedKey = await getSharedSymmetricKey(viewingKeyPair.privateKey, shieldKeyBuffer)
+
+		if (!sharedKey) {
+			return false
+		}
+
+		// Try to decrypt the random value
+		const encryptedBundle: [string, string, string] = [
+			shield.encryptedBundle0,
+			shield.encryptedBundle1,
+			shield.encryptedBundle2
+		]
+
+		const random = ShieldNote.decryptRandom(encryptedBundle, sharedKey)
+
+		// Verify the NPK matches
+		const computedNPK = ShieldNote.getNotePublicKey(addressData.masterPublicKey, random)
+		const expectedNPK = BigInt(shield.npk)
+
+		return computedNPK === expectedNPK
+	} catch (error) {
+		// Decryption failed - not ours
+		return false
+	}
+}
+
+/**
  * Gets complete privacy balance with recursive TRANSACT output decryption
  */
 export async function getPrivacyBalance(config: GetBalanceConfig): Promise<PrivacyBalanceResult> {
@@ -99,9 +138,10 @@ export async function getPrivacyBalance(config: GetBalanceConfig): Promise<Priva
 		}
 	}
 
-	// Step 2: Derive wallet keys
+	// Step 2: Derive wallet keys (CORRECT b402 method)
 	console.log('Deriving Railgun wallet keys...')
 	const mnemonic = await deriveMnemonicFromEOA(eoaPrivateKey)
+	console.log('Mnemonic (balance):', mnemonic)
 	const walletNodes = deriveNodes(mnemonic, 0)
 	const nullifyingKey = await walletNodes.spending.getNullifyingKey()
 	const viewingKeyPair = await walletNodes.viewing.getViewingKeyPair()
@@ -118,9 +158,42 @@ export async function getPrivacyBalance(config: GetBalanceConfig): Promise<Priva
 		viewingPublicKey: viewingKeyPair.pubkey
 	}
 	const railgunAddress = `0zk${masterPublicKey.toString(16).slice(0, 20)}...`
+	console.log('masterPublicKey:', masterPublicKey.toString(16))
+	console.log('railgunAddress:', railgunAddress)
 
-	// Step 3: Setup for recursive processing
-	const commitmentQueue: CommitmentInfo[] = shields.map((s) => ({
+	// Step 3: Verify shield ownership - filter out shields not belonging to this wallet
+	console.log('\nVerifying shield ownership...')
+	const myShields: typeof shields = []
+	for (const shield of shields) {
+		const isOwner = await verifyShieldOwnership(shield, viewingKeyPair, addressData)
+		if (isOwner) {
+			console.log(
+				`✅ Shield at position ${shield.position} (npk: ${shield.npk.slice(0, 10)}...) belongs to b402 zkWallet`
+			)
+			myShields.push(shield)
+		} else {
+			console.log(
+				`❌ Shield at position ${shield.position} (npk: ${shield.npk.slice(0, 10)}...) belongs to EOA but not to b402 zkWallet. This must've been created outside of the b402 app. Skipping.`
+			)
+		}
+	}
+
+	console.log(`\nVerified ${myShields.length} of ${shields.length} shields belong to you\n`)
+
+	if (myShields.length === 0) {
+		return {
+			eoa: eoaAddress,
+			railgunAddress,
+			totalCommitments: 0,
+			spendableCommitments: 0,
+			usedCommitments: 0,
+			tokenBalances: [],
+			summary: buildBalanceSummary([], 0, 0, 0)
+		}
+	}
+
+	// Step 4: Setup for recursive processing
+	const commitmentQueue: CommitmentInfo[] = myShields.map((s) => ({
 		commitmentHash: s.commitmentHash,
 		position: s.position,
 		amount: s.amount,
@@ -144,7 +217,7 @@ export async function getPrivacyBalance(config: GetBalanceConfig): Promise<Priva
 
 	console.log('Processing commitments recursively...')
 
-	// Step 4: Recursive queue processing with batched API calls
+	// Step 5: Recursive queue processing with batched API calls
 	while (commitmentQueue.length > 0) {
 		// Batch collect nullifiers from current queue
 		const batchCommitments: Array<{ commitment: CommitmentInfo; nullifier: string }> = []
@@ -243,7 +316,7 @@ export async function getPrivacyBalance(config: GetBalanceConfig): Promise<Priva
 	console.log(`Total commitments processed: ${allCommitments.length}`)
 	console.log(`Spendable: ${allCommitments.filter((c) => !c.spent).length}`)
 
-	// Step 5: Calculate balances per token (with token filtering if specified)
+	// Step 6: Calculate balances per token (with token filtering if specified)
 	const tokenBalanceMap = new Map<string, { balance: bigint; count: number }>()
 
 	for (const commit of allCommitments) {
@@ -265,7 +338,7 @@ export async function getPrivacyBalance(config: GetBalanceConfig): Promise<Priva
 		}
 	}
 
-	// Step 6: Get token metadata
+	// Step 7: Get token metadata
 	const tokenBalances: TokenBalance[] = []
 
 	for (const [tokenAddress, { balance, count }] of tokenBalanceMap.entries()) {
@@ -300,7 +373,7 @@ export async function getPrivacyBalance(config: GetBalanceConfig): Promise<Priva
 		})
 	}
 
-	// Step 7: Build summary
+	// Step 8: Build summary
 	const spendableCount = allCommitments.filter((c) => !c.spent).length
 	const usedCount = allCommitments.length - spendableCount
 

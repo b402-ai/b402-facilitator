@@ -1,3 +1,5 @@
+import { encodeAddress } from '@railgun-community/engine/dist/key-derivation/bech32'
+import { deriveNodes } from '@railgun-community/engine/dist/key-derivation/wallet-node'
 import {
 	type FallbackProviderJsonConfig,
 	NetworkName,
@@ -5,7 +7,6 @@ import {
 	TXIDVersion
 } from '@railgun-community/shared-models'
 import {
-	createRailgunWallet,
 	loadProvider,
 	populateShield,
 	startRailgunEngine,
@@ -47,7 +48,7 @@ const CONFIG: ShieldConfig = {
 	amount: ethers.parseUnits('0.01', 18),
 	railgunSmartWalletAddress: '0x590162bf4b50f6576a459b75309ee21d92178a10',
 	rpcUrl: process.env.BSC_RPC_URL || '',
-	apiUrl: 'http://localhost:3000',
+	apiUrl: 'http://localhost:3002',
 	gasLimit: 500000n
 }
 // ---------------------------
@@ -121,12 +122,30 @@ async function shieldTokens(config: ShieldConfig) {
 	await loadProvider(networkConfig, NetworkName.BNBChain, 60000)
 
 	const mnemonic = await deriveMnemonicFromEOA(config.eoaPrivateKey)
-	const encryptionKey = ethers.keccak256(ethers.toUtf8Bytes('b402-encryption-key')).slice(2)
-	const creationBlockNumbers = { [NetworkName.BNBChain]: 70253312 }
-	const walletInfo = await createRailgunWallet(encryptionKey, mnemonic, creationBlockNumbers)
 
-	console.log('Railgun Address (zk-address): ', walletInfo.railgunAddress)
+	// Manually derive Railgun address (no wallet creation needed for shielding)
+	const nodes = deriveNodes(mnemonic, 0)
+	const spendingKeyPair = nodes.spending.getSpendingKeyPair()
+	const nullifyingKey = await nodes.spending.getNullifyingKey()
+	const viewingKeyPair = await nodes.viewing.getViewingKeyPair()
+
+	// eslint-disable-next-line @typescript-eslint/no-explicit-any
+	const masterPublicKey = (nodes.spending.constructor as any).getMasterPublicKey(
+		spendingKeyPair.pubkey,
+		nullifyingKey
+	)
+
+	const addressData = {
+		masterPublicKey,
+		viewingPublicKey: viewingKeyPair.pubkey
+	}
+
+	const railgunAddress = encodeAddress(addressData)
+
+	console.log('Railgun Address (zk-address): ', railgunAddress)
 	console.log('Mnemonic: ', mnemonic)
+	console.log('masterPublicKey:', masterPublicKey.toString(16))
+	console.log('nullifyingKey:', nullifyingKey.toString())
 
 	const tokenContract = new Contract(config.token.address, ERC20_ABI, provider)
 
@@ -175,7 +194,7 @@ async function shieldTokens(config: ShieldConfig) {
 		{
 			tokenAddress: config.token.address,
 			amount: config.amount,
-			recipientAddress: walletInfo.railgunAddress
+			recipientAddress: railgunAddress
 		}
 	]
 
@@ -211,7 +230,7 @@ async function shieldTokens(config: ShieldConfig) {
 		txHash: tx.hash,
 		blockNumber: receipt.blockNumber,
 		gasUsed: receipt.gasUsed.toString(),
-		railgunAddress: walletInfo.railgunAddress,
+		railgunAddress: railgunAddress,
 		mnemonic: mnemonic
 	}
 

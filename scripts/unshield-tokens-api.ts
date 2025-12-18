@@ -1,3 +1,4 @@
+import { deriveNodes } from '@railgun-community/engine/dist/key-derivation/wallet-node'
 import type { Chain } from '@railgun-community/engine/dist/models/engine-types'
 import {
 	EVMGasType,
@@ -23,7 +24,8 @@ import {
 	setOnBalanceUpdateCallback,
 	setOnUTXOMerkletreeScanCallback,
 	startRailgunEngine,
-	stopRailgunEngine
+	stopRailgunEngine,
+	walletForID
 } from '@railgun-community/wallet'
 import 'dotenv/config'
 import { ethers } from 'ethers'
@@ -57,7 +59,7 @@ const CONFIG: UnshieldConfig = {
 		address: '0x55d398326f99059fF775485246999027B3197955',
 		decimals: 18
 	},
-	amount: ethers.parseUnits('0.01', 18),
+	amount: ethers.parseUnits('0.009975', 18),
 	recipientAddress: ''
 }
 
@@ -89,53 +91,59 @@ async function unshieldTokensAPI(config: UnshieldConfig) {
 
 	const provider = new ethers.JsonRpcProvider(config.rpcUrl)
 
-	console.log('=== BALANCE BEFORE UNSHIELDING ===')
-	try {
-		const balanceBefore = await getPrivacyBalance({
-			eoaPrivateKey: config.eoaPrivateKey,
-			rpcUrl: config.rpcUrl,
-			apiUrl: config.apiUrl,
-			tokenAddresses: [config.token.address]
-		})
-		console.log(balanceBefore.summary)
-	} catch (error) {
-		console.warn('Could not fetch balance:', error)
-	}
-
-	console.log('\n=== INITIALIZING RAILGUN ENGINE ===')
+	console.log('=== INITIALIZING RAILGUN ENGINE ===')
 	console.log('Mode: API-FIRST (no blockchain scanning)')
 
 	const db = new MemoryLevel()
-	const walletSource = 'b402unshield-api'
-	const encryptionKey = 'b402-encryption-key-0x01'
+	const walletSource = 'b402unshieldapi'
+	// 32-byte encryption key (64 hex characters)
+	const encryptionKey = '0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef'
 	const artifactsDir = '.railgun-artifacts'
 	const artifactStore = createFileBasedArtifactStore(artifactsDir)
 
 	console.log('Using artifacts directory:', artifactsDir)
 
-	setOnBalanceUpdateCallback(() => {})
-	setOnUTXOMerkletreeScanCallback(() => {})
+	try {
+		await startRailgunEngine(
+			walletSource,
+			db,
+			false,
+			artifactStore,
+			false,
+			false, // Enable merkletree scans but start from current block (scans 0 blocks)
+			['https://ppoi-agg.horsewithsixlegs.xyz'],
+			[],
+			false
+		)
+		console.log('✅ Railgun engine started successfully')
+	} catch (error) {
+		console.error('❌ Failed to start Railgun engine:', error)
+		throw error
+	}
 
-	await startRailgunEngine(
-		walletSource,
-		db,
-		false,
-		artifactStore,
-		false,
-		true, // skipMerkletreeScans
-		['https://ppoi-agg.horsewithsixlegs.xyz'],
-		[],
-		false
-	)
-
-	console.log('Railgun engine started (merkle tree scanning skipped)')
+	// Set callbacks after engine is initialized
+	setOnBalanceUpdateCallback((balanceUpdate) => {
+		console.log('Balance update:', JSON.stringify(balanceUpdate, null, 2))
+	})
+	setOnUTXOMerkletreeScanCallback((scanUpdate) => {
+		console.log(
+			`Scanning: ${scanUpdate.chain.type}:${scanUpdate.chain.id} - Progress: ${scanUpdate.progress.toFixed(2)}%`
+		)
+	})
 
 	// Configure snarkjs as the prover
-	const engine = getEngine()
-	engine.prover.setSnarkJSGroth16(snarkjs.groth16)
-	console.log('Configured snarkjs as the ZK prover')
+	try {
+		const engine = getEngine()
+		console.log('✅ Got engine instance')
+		engine.prover.setSnarkJSGroth16(snarkjs.groth16)
+		console.log('✅ Configured snarkjs as the ZK prover')
+	} catch (error) {
+		console.error('❌ Failed to configure prover:', error)
+		throw error
+	}
 
 	const mnemonic = await deriveMnemonicFromEOA(config.eoaPrivateKey)
+	console.log('Mnemonic:', mnemonic)
 	const chain: Chain = { type: 0, id: 56 }
 
 	// Configure network provider
@@ -147,17 +155,83 @@ async function unshieldTokensAPI(config: UnshieldConfig) {
 				priority: 1,
 				weight: 1,
 				stallTimeout: 2500
+			},
+			{
+				provider: 'https://bsc-dataseed.binance.org',
+				priority: 2,
+				weight: 1,
+				stallTimeout: 2500
 			}
 		]
 	}
 
 	await loadProvider(networkConfig, NetworkName.BNBChain, 60000)
 
-	const creationBlockNumbers = { [NetworkName.BNBChain]: 0 } // 0 = no historical scanning
+	// Use the block number where the shield was created to allow wallet to scan and discover commitments
+	const shieldBlockNumber = 72081097
+	const currentBlock = await provider.getBlockNumber()
+	console.log('Current block:', currentBlock)
+	console.log('Shield block:', shieldBlockNumber)
+	console.log(
+		`Creating wallet from block ${shieldBlockNumber} (will scan ${currentBlock - shieldBlockNumber} blocks)...`
+	)
+
+	const creationBlockNumbers = { [NetworkName.BNBChain]: shieldBlockNumber }
 	const walletInfo = await createRailgunWallet(encryptionKey, mnemonic, creationBlockNumbers)
 
 	console.log('Wallet ID:', walletInfo.id)
 	console.log('RAILGUN Address (zk-address):', walletInfo.railgunAddress)
+
+	// Debug: Extract actual masterPublicKey from created wallet
+	const wallet = walletForID(walletInfo.id)
+	const actualMasterPublicKey = wallet.masterPublicKey
+	const actualNullifyingKey = wallet.nullifyingKey
+	console.log('\nActual SDK Wallet Keys:')
+	console.log('  masterPublicKey:', actualMasterPublicKey.toString(16))
+	console.log('  nullifyingKey:', actualNullifyingKey.toString())
+
+	// Debug: Check if the wallet's keys match - use WALLET's derivation method
+	const debugNodes = deriveNodes(mnemonic, 0)
+	const debugSpendingKeyPair = debugNodes.spending.getSpendingKeyPair()
+	const debugViewingKeyPair = await debugNodes.viewing.getViewingKeyPair()
+
+	// Import required functions
+	const { poseidonHex } = await import('@railgun-community/engine/dist/utils/poseidon')
+	const { ByteUtils } = await import('@railgun-community/engine/dist/utils/bytes')
+	const { WalletNode } = await import('@railgun-community/engine/dist/key-derivation/wallet-node')
+
+	// Compute nullifying key THE SAME WAY AS THE WALLET (from viewing private key)
+	const debugNullifyingKey = ByteUtils.hexToBigInt(
+		poseidonHex([ByteUtils.fastBytesToHex(debugViewingKeyPair.privateKey)])
+	)
+
+	// Compute master public key using wallet's method
+	const debugMasterPublicKey = WalletNode.getMasterPublicKey(
+		debugSpendingKeyPair.pubkey,
+		debugNullifyingKey
+	)
+
+	console.log('\nExpected b402 zkWallet Keys (using wallet derivation):')
+	console.log('  masterPublicKey:', debugMasterPublicKey.toString(16))
+	console.log('  nullifyingKey:', debugNullifyingKey.toString())
+
+	console.log(
+		'\nKeys Match:',
+		actualMasterPublicKey === debugMasterPublicKey && actualNullifyingKey === debugNullifyingKey
+	)
+
+	console.log('\n=== BALANCE BEFORE UNSHIELDING ===')
+	try {
+		const balanceBefore = await getPrivacyBalance({
+			eoaPrivateKey: config.eoaPrivateKey,
+			rpcUrl: config.rpcUrl,
+			apiUrl: config.apiUrl,
+			tokenAddresses: [config.token.address]
+		})
+		console.log(balanceBefore.summary)
+	} catch (error) {
+		console.warn('Could not fetch balance:', error)
+	}
 
 	let selectedBroadcaster: SelectedBroadcaster | undefined
 

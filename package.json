@@ -9,7 +9,6 @@
 		"build": "tsc",
 		"start": "tsx watch --clear-screen=false ./src/index.ts",
 		"dev": "tsx watch --clear-screen=false ./src/index.ts",
-		"unshield-api": "node --import tsx --no-warnings scripts/unshield-tokens-api.ts",
 		"lint": "eslint .",
 		"lint:fix": "eslint --fix .",
 		"format": "prettier --check .",

@@ -45,56 +45,77 @@ async function decryptShieldCommitment(
 	chain: Chain
 ): Promise<TransactNote | null> {
 	try {
-		const ciphertext = {
-			ciphertext: [
-				commitment.encryptedBundle0,
-				commitment.encryptedBundle1,
-				commitment.encryptedBundle2,
-				'0x0000000000000000000000000000000000000000000000000000000000000000'
-			],
-			ephemeralKeys: [commitment.shieldKey, commitment.npk],
-			memo: []
-		}
+		// Shield commitments have plaintext value/token data in the event logs
+		// Only the random value is encrypted for privacy
+		// We just need to verify we can decrypt the random to confirm ownership
 
-		const blindedReceiverViewingKey = Buffer.from(commitment.npk.replace('0x', ''), 'hex')
-		const sharedKey = await getSharedSymmetricKey(
-			viewingKeyPair.privateKey,
-			blindedReceiverViewingKey
-		)
+		const shieldKeyBuffer = Buffer.from(commitment.shieldKey.replace('0x', ''), 'hex')
+		const sharedKey = await getSharedSymmetricKey(viewingKeyPair.privateKey, shieldKeyBuffer)
 		if (!sharedKey) {
 			return null
 		}
 
-		const blindedSenderViewingKey = Buffer.from(commitment.shieldKey.replace('0x', ''), 'hex')
+		// Import ShieldNote for decryption
+		const { ShieldNote } = await import('@railgun-community/engine/dist/note/shield-note')
 
-		// eslint-disable-next-line @typescript-eslint/no-explicit-any
-		const decrypted = await TransactNote.decrypt(
+		// Decrypt the random value to verify ownership
+		const encryptedBundle: [string, string, string] = [
+			commitment.encryptedBundle0,
+			commitment.encryptedBundle1,
+			commitment.encryptedBundle2
+		]
+		const random = ShieldNote.decryptRandom(encryptedBundle, sharedKey)
+
+		// Verify NPK matches
+		const computedNPK = ShieldNote.getNotePublicKey(addressData.masterPublicKey, random)
+		const expectedNPK = BigInt(commitment.npk)
+		if (computedNPK !== expectedNPK) {
+			return null
+		}
+
+		// Construct TransactNote from plaintext shield data using deserialize
+		const { encodeAddress } = await import('@railgun-community/engine/dist/key-derivation/bech32')
+		const { getTokenDataHash } = await import('@railgun-community/engine/dist/note/note-util')
+		const recipientAddress = encodeAddress(addressData)
+
+		// Get token hash
+		const tokenHash = getTokenDataHash({
+			tokenAddress: commitment.tokenAddress,
+			tokenType: Number.parseInt(commitment.tokenType.toString()),
+			tokenSubID: commitment.tokenSubID
+		})
+
+		const noteSerialized = {
+			recipientAddress,
+			random,
+			value: `0x${BigInt(commitment.amount).toString(16)}`,
+			tokenHash: `0x${tokenHash.toString(16)}`,
+			// eslint-disable-next-line @typescript-eslint/no-explicit-any
+			outputType: 0 as any,
+			walletSource: undefined,
+			senderAddress: undefined,
+			senderRandom: undefined,
+			memoText: undefined,
+			shieldFee: undefined,
+			blockNumber: undefined
+		}
+
+		const note = await TransactNote.deserialize(
 			TXIDVersion.V2_PoseidonMerkle,
 			chain,
-			addressData,
-			// eslint-disable-next-line @typescript-eslint/no-explicit-any
-			ciphertext as any,
-			sharedKey,
-			'',
-			'',
+			noteSerialized,
 			viewingKeyPair.privateKey,
-			blindedReceiverViewingKey,
-			blindedSenderViewingKey,
-			false,
-			false,
 			{
 				getTokenDataFromHash: async () => ({
 					tokenAddress: commitment.tokenAddress,
 					tokenType: Number.parseInt(commitment.tokenType.toString()),
 					tokenSubID: commitment.tokenSubID
 				})
-			} as TokenDataGetter,
-			undefined,
-			undefined
+			} as TokenDataGetter
 		)
 
-		return decrypted
-	} catch {
+		return note
+	} catch (error) {
 		return null
 	}
 }
