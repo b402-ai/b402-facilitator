@@ -123,17 +123,22 @@ async function shieldTokens(config: ShieldConfig) {
 
 	const mnemonic = await deriveMnemonicFromEOA(config.eoaPrivateKey)
 
-	// Manually derive Railgun address (no wallet creation needed for shielding)
+	// Manually derive Railgun address (match SDK wallet derivation)
 	const nodes = deriveNodes(mnemonic, 0)
 	const spendingKeyPair = nodes.spending.getSpendingKeyPair()
-	const nullifyingKey = await nodes.spending.getNullifyingKey()
 	const viewingKeyPair = await nodes.viewing.getViewingKeyPair()
 
-	// eslint-disable-next-line @typescript-eslint/no-explicit-any
-	const masterPublicKey = (nodes.spending.constructor as any).getMasterPublicKey(
-		spendingKeyPair.pubkey,
-		nullifyingKey
+	// Compute nullifying key from viewing node's private key (same as SDK wallet)
+	const { poseidonHex } = await import('@railgun-community/engine/dist/utils/poseidon')
+	const { ByteUtils } = await import('@railgun-community/engine/dist/utils/bytes')
+	const { WalletNode } = await import('@railgun-community/engine/dist/key-derivation/wallet-node')
+
+	const nullifyingKey = ByteUtils.hexToBigInt(
+		poseidonHex([ByteUtils.fastBytesToHex(viewingKeyPair.privateKey)])
 	)
+
+	// Build master public key using SDK's method
+	const masterPublicKey = WalletNode.getMasterPublicKey(spendingKeyPair.pubkey, nullifyingKey)
 
 	const addressData = {
 		masterPublicKey,

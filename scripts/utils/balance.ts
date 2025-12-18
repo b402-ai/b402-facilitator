@@ -138,21 +138,25 @@ export async function getPrivacyBalance(config: GetBalanceConfig): Promise<Priva
 		}
 	}
 
-	// Step 2: Derive wallet keys (CORRECT b402 method)
+	// Step 2: Derive wallet keys (match SDK wallet derivation)
 	console.log('Deriving Railgun wallet keys...')
 	const mnemonic = await deriveMnemonicFromEOA(eoaPrivateKey)
 	console.log('Mnemonic (balance):', mnemonic)
 	const walletNodes = deriveNodes(mnemonic, 0)
-	const nullifyingKey = await walletNodes.spending.getNullifyingKey()
 	const viewingKeyPair = await walletNodes.viewing.getViewingKeyPair()
 	const spendingKeyPair = walletNodes.spending.getSpendingKeyPair()
 
-	// Build AddressData
-	// eslint-disable-next-line @typescript-eslint/no-explicit-any
-	const masterPublicKey = (walletNodes.spending.constructor as any).getMasterPublicKey(
-		spendingKeyPair.pubkey,
-		nullifyingKey
+	// Compute nullifying key from viewing node's private key (same as SDK wallet)
+	const { poseidonHex } = await import('@railgun-community/engine/dist/utils/poseidon')
+	const { ByteUtils } = await import('@railgun-community/engine/dist/utils/bytes')
+	const { WalletNode } = await import('@railgun-community/engine/dist/key-derivation/wallet-node')
+
+	const nullifyingKey = ByteUtils.hexToBigInt(
+		poseidonHex([ByteUtils.fastBytesToHex(viewingKeyPair.privateKey)])
 	)
+
+	// Build AddressData using SDK's method
+	const masterPublicKey = WalletNode.getMasterPublicKey(spendingKeyPair.pubkey, nullifyingKey)
 	const addressData: AddressData = {
 		masterPublicKey,
 		viewingPublicKey: viewingKeyPair.pubkey
