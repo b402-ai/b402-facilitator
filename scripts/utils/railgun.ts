@@ -28,6 +28,15 @@ export async function deriveMnemonicFromEOA(eoaPrivateKey: string): Promise<stri
 	const signature = await wallet.signMessage(message)
 	const entropy = ethers.keccak256(signature).slice(0, 34) // 32 bytes + '0x'
 	const mnemonic = Mnemonic.fromEntropy(entropy)
+
+	// Debug logging
+	console.log('[DEBUG deriveMnemonicFromEOA]')
+	console.log('  EOA Address:', wallet.address)
+	console.log('  Message:', message)
+	console.log('  Signature:', signature)
+	console.log('  Entropy:', entropy)
+	console.log('  Mnemonic:', mnemonic.phrase)
+
 	return mnemonic.phrase
 }
 
@@ -71,21 +80,41 @@ export function createInMemoryArtifactStore(): ArtifactStore {
 export function createFileBasedArtifactStore(artifactsDir: string): ArtifactStore {
 	return new ArtifactStore(
 		async (filePath: string) => {
+			console.log('[DEBUG Artifact Store] Requested filePath:', filePath)
 			const fullPath = path.join(artifactsDir, filePath)
-			const data = await fs.readFile(fullPath)
-			return data
+			console.log('[DEBUG Artifact Store] Full path:', fullPath)
+			try {
+				const data = await fs.readFile(fullPath)
+				console.log('[DEBUG Artifact Store] Successfully read', data.length, 'bytes')
+				return data
+			} catch (error) {
+				console.log('[DEBUG Artifact Store] Failed to read:', error)
+				throw error
+			}
 		},
 		async (dir: string, filePath: string, item: string | Uint8Array) => {
-			const fullPath = path.join(artifactsDir, dir, filePath)
-			await fs.mkdir(path.dirname(fullPath), { recursive: true })
-			await fs.writeFile(fullPath, item)
+			console.log('[DEBUG Artifact Store] Writing artifact:', { dir, filePath })
+			// filePath already contains the full relative path, so use it directly
+			const fullPath = path.join(artifactsDir, filePath)
+			console.log('[DEBUG Artifact Store] Full write path:', fullPath)
+			try {
+				await fs.mkdir(path.dirname(fullPath), { recursive: true })
+				await fs.writeFile(fullPath, item)
+				console.log('[DEBUG Artifact Store] Successfully wrote artifact')
+			} catch (error) {
+				console.log('[DEBUG Artifact Store] Failed to write:', error)
+				throw error
+			}
 		},
 		async (filePath: string) => {
+			console.log('[DEBUG Artifact Store] Checking exists:', filePath)
 			const fullPath = path.join(artifactsDir, filePath)
 			try {
 				await fs.access(fullPath)
+				console.log('[DEBUG Artifact Store] File exists:', fullPath)
 				return true
 			} catch {
+				console.log('[DEBUG Artifact Store] File does not exist:', fullPath)
 				return false
 			}
 		}

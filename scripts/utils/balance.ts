@@ -95,7 +95,11 @@ async function verifyShieldOwnership(
 		const computedNPK = ShieldNote.getNotePublicKey(addressData.masterPublicKey, random)
 		const expectedNPK = BigInt(shield.npk)
 
-		return computedNPK === expectedNPK
+		const matches = computedNPK === expectedNPK
+		console.log(`  Computed NPK: 0x${computedNPK.toString(16)}`)
+		console.log(`  Match: ${matches}`)
+
+		return matches
 	} catch (error) {
 		// Decryption failed - not ours
 		return false
@@ -167,9 +171,16 @@ export async function getPrivacyBalance(config: GetBalanceConfig): Promise<Priva
 
 	// Step 3: Verify shield ownership - filter out shields not belonging to this wallet
 	console.log('\nVerifying shield ownership...')
+	console.log('[DEBUG] Using masterPublicKey:', masterPublicKey.toString(16))
 	const myShields: typeof shields = []
 	for (const shield of shields) {
 		const isOwner = await verifyShieldOwnership(shield, viewingKeyPair, addressData)
+
+		// Debug: Show NPK verification details
+		console.log(`[DEBUG] Shield ${shield.position}:`)
+		console.log(`  Expected NPK: ${shield.npk}`)
+		console.log(`  Verification result: ${isOwner}`)
+
 		if (isOwner) {
 			console.log(
 				`✅ Shield at position ${shield.position} (npk: ${shield.npk.slice(0, 10)}...) belongs to b402 zkWallet`

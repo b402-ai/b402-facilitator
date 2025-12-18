@@ -36,6 +36,7 @@ import { computeMasterWalletAddress, deriveUnshieldEOA } from '../src/utils/wall
 import { getPrivacyBalance } from './utils/balance'
 import { createFileBasedArtifactStore, deriveMnemonicFromEOA } from './utils/railgun'
 import { fetchSpendableUTXOs } from './utils/unshield-api'
+import { injectUTXOsIntoWallet } from './utils/wallet-injection'
 
 interface UnshieldConfig {
 	mode: 'eoa' | 'broadcaster'
@@ -274,6 +275,51 @@ async function unshieldTokensAPI(config: UnshieldConfig) {
 		throw new Error('No spendable UTXOs found for this token')
 	}
 
+	// Inject UTXOs from API into SDK wallet database
+	console.log('\n=== INJECTING UTXOs INTO SDK WALLET ===')
+	await injectUTXOsIntoWallet(walletInfo.id, chain, spendableUTXOs)
+
+	// Verify injection by checking SDK wallet's balance
+	console.log('\n=== VERIFYING SDK WALLET BALANCE ===')
+	try {
+		const { balanceForERC20Token, fullWalletForID } = await import('@railgun-community/wallet')
+
+		const fullWallet = fullWalletForID(walletInfo.id)
+
+		// Get token details for formatting
+		const tokenContract = new ethers.Contract(config.token.address, ERC20_ABI, provider)
+		const symbol = await tokenContract.symbol()
+		const decimals = await tokenContract.decimals()
+
+		const sdkSpendableBalance = await balanceForERC20Token(
+			TXIDVersion.V2_PoseidonMerkle,
+			fullWallet,
+			NetworkName.BNBChain,
+			config.token.address,
+			true // onlySpendable
+		)
+
+		const sdkTotalBalance = await balanceForERC20Token(
+			TXIDVersion.V2_PoseidonMerkle,
+			fullWallet,
+			NetworkName.BNBChain,
+			config.token.address,
+			false // all UTXOs
+		)
+
+		console.log('[SDK Wallet Balance After Injection]')
+		console.log('  Spendable:', ethers.formatUnits(sdkSpendableBalance, decimals), symbol)
+		console.log('  Total:', ethers.formatUnits(sdkTotalBalance, decimals), symbol)
+
+		if (sdkSpendableBalance === 0n) {
+			console.warn('⚠️  WARNING: SDK wallet still shows 0 balance after injection!')
+		} else {
+			console.log('✅ SDK wallet successfully sees injected UTXOs')
+		}
+	} catch (error) {
+		console.error('Failed to verify SDK wallet balance:', error)
+	}
+
 	const totalAvailable = spendableUTXOs.reduce((sum, utxo) => sum + utxo.txo.note.value, 0n)
 	console.log(`Total available: ${ethers.formatUnits(totalAvailable, config.token.decimals || 18)}`)
 
@@ -298,6 +344,7 @@ async function unshieldTokensAPI(config: UnshieldConfig) {
 		`Selected ${selectedUTXOs.length} UTXOs with total value ${ethers.formatUnits(selectedTotal, config.token.decimals || 18)}`
 	)
 
+	// Get token details
 	const tokenContract = new ethers.Contract(config.token.address, ERC20_ABI, provider)
 	const symbol = await tokenContract.symbol()
 	const decimals = await tokenContract.decimals()
@@ -357,15 +404,8 @@ async function unshieldTokensAPI(config: UnshieldConfig) {
 		)
 	}
 
-	console.log('\n=== BUILDING UNSHIELD TRANSACTION ===')
-
-	const erc20AmountRecipients: RailgunERC20AmountRecipient[] = [
-		{
-			tokenAddress: config.token.address,
-			amount: config.amount,
-			recipientAddress: config.recipientAddress
-		}
-	]
+	console.log('\n=== BUILDING UNSHIELD TRANSACTIONS ===')
+	console.log(`Will unshield ${selectedUTXOs.length} UTXO(s) individually to reach target amount`)
 
 	// Prompt user to continue
 	console.log('\n=== READY TO UNSHIELD ===')
@@ -378,96 +418,141 @@ async function unshieldTokensAPI(config: UnshieldConfig) {
 		})
 	})
 
-	// Generate proof (this takes time!)
-	console.log('\nGenerating zero-knowledge proof (this may take 10-30 seconds)...')
-	const proofStartTime = Date.now()
-
 	const sendWithPublicWallet = config.mode === 'eoa'
+	let totalUnshielded = 0n
+	const txHashes: string[] = []
 
-	await generateUnshieldProof(
-		TXIDVersion.V2_PoseidonMerkle,
-		NetworkName.BNBChain,
-		walletInfo.id,
-		encryptionKey,
-		erc20AmountRecipients,
-		[],
-		broadcasterFeeRecipient, // Broadcaster fee (undefined in eoa mode)
-		sendWithPublicWallet, // true for eoa mode, false for broadcaster mode
-		gasPrice, // overallBatchMinGasPrice
-		() => console.log('Proof generation in progress...')
-	)
+	// Process each UTXO individually
+	for (let i = 0; i < selectedUTXOs.length; i++) {
+		const utxo = selectedUTXOs[i]
+		const remainingAmount = config.amount - totalUnshielded
 
-	const proofTime = ((Date.now() - proofStartTime) / 1000).toFixed(2)
-	console.log(`Proof generated in ${proofTime}s`)
+		// Determine how much to unshield from this UTXO
+		// Use the full UTXO value (or remaining amount, whichever is smaller)
+		const unshieldAmount =
+			utxo.txo.note.value < remainingAmount ? utxo.txo.note.value : remainingAmount
 
-	// Populate transaction with proof
-	console.log('\nPopulating unshield transaction...')
-
-	// Create proper gas details with BigInt values (Type0 for BSC)
-	const gasDetails: TransactionGasDetailsType0 = {
-		evmGasType: EVMGasType.Type0,
-		gasEstimate: estimatedGas,
-		gasPrice: gasPrice
-	}
-
-	const populateResponse = await populateProvedUnshield(
-		TXIDVersion.V2_PoseidonMerkle,
-		NetworkName.BNBChain,
-		walletInfo.id,
-		erc20AmountRecipients,
-		[],
-		broadcasterFeeRecipient, // Broadcaster fee (undefined in eoa mode)
-		sendWithPublicWallet, // true for eoa mode, false for broadcaster mode
-		gasPrice, // overallBatchMinGasPrice
-		gasDetails
-	)
-
-	console.log(`Transaction populated with ${populateResponse.nullifiers?.length || 0} nullifiers`)
-
-	// Send transaction (method depends on mode)
-	let txHash: string
-
-	if (config.mode === 'broadcaster') {
-		// Send via broadcaster
-		console.log('\nSending transaction through Waku broadcaster network...')
-
-		if (!selectedBroadcaster) {
-			throw new Error('No broadcaster selected')
-		}
-
-		if (!populateResponse.nullifiers || populateResponse.nullifiers.length === 0) {
-			throw new Error('No nullifiers returned from populateProvedUnshield')
-		}
-
-		const broadcasterTransaction = await BroadcasterTransaction.create(
-			TXIDVersion.V2_PoseidonMerkle, // txidVersionForInputs
-			populateResponse.transaction.to!,
-			populateResponse.transaction.data!,
-			selectedBroadcaster.railgunAddress,
-			selectedBroadcaster.tokenFee.feesID,
-			chain,
-			populateResponse.nullifiers,
-			gasPrice, // overallBatchMinGasPrice
-			false, // useRelayAdapt
-			populateResponse.preTransactionPOIsPerTxidLeafPerList // POI proofs
+		console.log(
+			`\n=== UNSHIELDING UTXO ${i + 1}/${selectedUTXOs.length} (Position ${utxo.txo.position}) ===`
+		)
+		console.log(`Amount: ${ethers.formatUnits(unshieldAmount, decimals)} ${symbol}`)
+		console.log(
+			`Progress: ${ethers.formatUnits(totalUnshielded + unshieldAmount, decimals)}/${ethers.formatUnits(config.amount, decimals)} ${symbol}`
 		)
 
-		txHash = await broadcasterTransaction.send()
-		console.log('Transaction broadcasted! Hash:', txHash)
-	} else {
-		// Send via EOA directly
-		console.log('\nSending transaction directly from EOA...')
+		const erc20AmountRecipients: RailgunERC20AmountRecipient[] = [
+			{
+				tokenAddress: config.token.address,
+				amount: unshieldAmount,
+				recipientAddress: config.recipientAddress
+			}
+		]
 
-		const wallet = new ethers.Wallet(config.eoaPrivateKey, provider)
-		const tx = await wallet.sendTransaction(populateResponse.transaction)
-		txHash = tx.hash
-		console.log('Transaction sent! Hash:', txHash)
+		// Generate proof (this takes time!)
+		console.log('\nGenerating zero-knowledge proof (this may take 10-30 seconds)...')
+		const proofStartTime = Date.now()
+
+		await generateUnshieldProof(
+			TXIDVersion.V2_PoseidonMerkle,
+			NetworkName.BNBChain,
+			walletInfo.id,
+			encryptionKey,
+			erc20AmountRecipients,
+			[],
+			broadcasterFeeRecipient, // Broadcaster fee (undefined in eoa mode)
+			sendWithPublicWallet, // true for eoa mode, false for broadcaster mode
+			gasPrice, // overallBatchMinGasPrice
+			() => console.log('Proof generation in progress...')
+		)
+
+		const proofTime = ((Date.now() - proofStartTime) / 1000).toFixed(2)
+		console.log(`Proof generated in ${proofTime}s`)
+
+		// Populate transaction with proof
+		console.log('Populating unshield transaction...')
+
+		// Create proper gas details with BigInt values (Type0 for BSC)
+		const gasDetails: TransactionGasDetailsType0 = {
+			evmGasType: EVMGasType.Type0,
+			gasEstimate: estimatedGas,
+			gasPrice: gasPrice
+		}
+
+		const populateResponse = await populateProvedUnshield(
+			TXIDVersion.V2_PoseidonMerkle,
+			NetworkName.BNBChain,
+			walletInfo.id,
+			erc20AmountRecipients,
+			[],
+			broadcasterFeeRecipient, // Broadcaster fee (undefined in eoa mode)
+			sendWithPublicWallet, // true for eoa mode, false for broadcaster mode
+			gasPrice, // overallBatchMinGasPrice
+			gasDetails
+		)
+
+		console.log(`Transaction populated with ${populateResponse.nullifiers?.length || 0} nullifiers`)
+
+		// Send transaction (method depends on mode)
+		let txHash: string
+
+		if (config.mode === 'broadcaster') {
+			// Send via broadcaster
+			console.log('Sending transaction through Waku broadcaster network...')
+
+			if (!selectedBroadcaster) {
+				throw new Error('No broadcaster selected')
+			}
+
+			if (!populateResponse.nullifiers || populateResponse.nullifiers.length === 0) {
+				throw new Error('No nullifiers returned from populateProvedUnshield')
+			}
+
+			const broadcasterTransaction = await BroadcasterTransaction.create(
+				TXIDVersion.V2_PoseidonMerkle, // txidVersionForInputs
+				populateResponse.transaction.to!,
+				populateResponse.transaction.data!,
+				selectedBroadcaster.railgunAddress,
+				selectedBroadcaster.tokenFee.feesID,
+				chain,
+				populateResponse.nullifiers,
+				gasPrice, // overallBatchMinGasPrice
+				false, // useRelayAdapt
+				populateResponse.preTransactionPOIsPerTxidLeafPerList // POI proofs
+			)
+
+			txHash = await broadcasterTransaction.send()
+			console.log('Transaction broadcasted! Hash:', txHash)
+		} else {
+			// Send via EOA directly
+			console.log('Sending transaction directly from EOA...')
+
+			const wallet = new ethers.Wallet(config.eoaPrivateKey, provider)
+			const tx = await wallet.sendTransaction(populateResponse.transaction)
+			txHash = tx.hash
+			console.log('Transaction sent! Hash:', txHash)
+		}
+
+		// Wait for confirmation
+		console.log('Waiting for confirmation...')
+		const receipt = await provider.waitForTransaction(txHash)
+		console.log('Confirmed in block:', receipt?.blockNumber)
+
+		txHashes.push(txHash)
+		totalUnshielded += unshieldAmount
+
+		// Stop if we've unshielded enough
+		if (totalUnshielded >= config.amount) {
+			console.log(
+				`\n✅ Target amount reached: ${ethers.formatUnits(totalUnshielded, decimals)} ${symbol}`
+			)
+			break
+		}
 	}
 
-	// Wait for confirmation
-	console.log('Waiting for confirmation...')
-	const receipt = await provider.waitForTransaction(txHash)
-	console.log('Confirmed in block:', receipt?.blockNumber)
+	console.log(`\n=== UNSHIELD COMPLETE ===`)
+	console.log(`Total unshielded: ${ethers.formatUnits(totalUnshielded, decimals)} ${symbol}`)
+	console.log(`Transaction hashes:`)
+	txHashes.forEach((hash, i) => console.log(`  ${i + 1}. ${hash}`))
 
 	// Cleanup
 	if (config.mode === 'broadcaster') {
