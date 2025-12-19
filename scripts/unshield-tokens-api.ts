@@ -7,8 +7,7 @@ import {
 	type RailgunERC20Amount,
 	type RailgunERC20AmountRecipient,
 	type SelectedBroadcaster,
-	TXIDVersion,
-	type TransactionGasDetailsType0
+	TXIDVersion
 } from '@railgun-community/shared-models'
 import {
 	BroadcasterTransaction,
@@ -17,12 +16,9 @@ import {
 import {
 	calculateBroadcasterFeeERC20Amount,
 	createRailgunWallet,
-	generateUnshieldProof,
 	getEngine,
 	loadProvider,
-	populateProvedUnshield,
 	setOnBalanceUpdateCallback,
-	setOnUTXOMerkletreeScanCallback,
 	startRailgunEngine,
 	stopRailgunEngine,
 	walletForID
@@ -33,10 +29,21 @@ import { MemoryLevel } from 'memory-level'
 import * as snarkjs from 'snarkjs'
 
 import { computeMasterWalletAddress, deriveUnshieldEOA } from '../src/utils/wallet'
+import { buildUnshieldProofInputs } from './railgun-core/proof/inputs-builder'
+import { generateProofManually } from './railgun-core/proof/prover'
+import {
+	encodeUnshieldTransaction,
+	formatUnshieldTransaction
+} from './railgun-core/transaction/formatter'
 import { getPrivacyBalance } from './utils/balance'
 import { createFileBasedArtifactStore, deriveMnemonicFromEOA } from './utils/railgun'
+import {
+	calculateInclusiveFee,
+	calculateRequiredUnshieldAmount,
+	fetchUnshieldFee,
+	formatFeeInfo
+} from './utils/railgun-fees'
 import { fetchSpendableUTXOs } from './utils/unshield-api'
-import { injectUTXOsIntoWallet } from './utils/wallet-injection'
 
 interface UnshieldConfig {
 	mode: 'eoa' | 'broadcaster'
@@ -111,7 +118,7 @@ async function unshieldTokensAPI(config: UnshieldConfig) {
 			false,
 			artifactStore,
 			false,
-			false, // Enable merkletree scans but start from current block (scans 0 blocks)
+			false, // skipMerkletreeScans: false - Required to create wallet, but we'll scan from latest block (0 blocks)
 			['https://ppoi-agg.horsewithsixlegs.xyz'],
 			[],
 			false
@@ -122,14 +129,9 @@ async function unshieldTokensAPI(config: UnshieldConfig) {
 		throw error
 	}
 
-	// Set callbacks after engine is initialized
+	// Set balance update callback
 	setOnBalanceUpdateCallback((balanceUpdate) => {
 		console.log('Balance update:', JSON.stringify(balanceUpdate, null, 2))
-	})
-	setOnUTXOMerkletreeScanCallback((scanUpdate) => {
-		console.log(
-			`Scanning: ${scanUpdate.chain.type}:${scanUpdate.chain.id} - Progress: ${scanUpdate.progress.toFixed(2)}%`
-		)
 	})
 
 	// Configure snarkjs as the prover
@@ -168,17 +170,18 @@ async function unshieldTokensAPI(config: UnshieldConfig) {
 
 	await loadProvider(networkConfig, NetworkName.BNBChain, 60000)
 
-	// Use the block number where the shield was created to allow wallet to scan and discover commitments
-	const shieldBlockNumber = 72081097
+	// Create wallet from current block to avoid scanning
+	// We don't need scanning because we inject UTXOs and commitments from B402 API
 	const currentBlock = await provider.getBlockNumber()
 	console.log('Current block:', currentBlock)
-	console.log('Shield block:', shieldBlockNumber)
-	console.log(
-		`Creating wallet from block ${shieldBlockNumber} (will scan ${currentBlock - shieldBlockNumber} blocks)...`
-	)
+	console.log('Creating wallet from current block (will scan 0 blocks - API-first approach)...')
 
-	const creationBlockNumbers = { [NetworkName.BNBChain]: shieldBlockNumber }
+	const creationBlockNumbers = { [NetworkName.BNBChain]: currentBlock }
 	const walletInfo = await createRailgunWallet(encryptionKey, mnemonic, creationBlockNumbers)
+
+	// No need to wait for wallet scan - we're starting from current block (0 blocks to scan)
+	// and we're using API data instead of blockchain scanning
+	console.log('✅ Wallet created (API-first mode - no blockchain scanning needed)')
 
 	console.log('Wallet ID:', walletInfo.id)
 	console.log('RAILGUN Address (zk-address):', walletInfo.railgunAddress)
@@ -258,6 +261,13 @@ async function unshieldTokensAPI(config: UnshieldConfig) {
 		console.log('Direct signing (faster, no IP privacy)')
 	}
 
+	console.log('\n=== FETCHING RAILGUN CONTRACT FEE ===')
+	const railgunContractAddress = '0x590162bf4b50F6576a459B75309eE21D92178A10' // BSC Railgun contract
+	const unshieldFee = await fetchUnshieldFee(config.rpcUrl, railgunContractAddress)
+	console.log(
+		`Unshield fee: ${(Number(unshieldFee) / 100).toFixed(2)}% (${unshieldFee} basis points)`
+	)
+
 	console.log('\n=== FETCHING SPENDABLE UTXOs FROM API ===')
 
 	const { spendableUTXOs, totalCommitments, spendableCount } = await fetchSpendableUTXOs(
@@ -275,73 +285,55 @@ async function unshieldTokensAPI(config: UnshieldConfig) {
 		throw new Error('No spendable UTXOs found for this token')
 	}
 
-	// Inject UTXOs from API into SDK wallet database
-	console.log('\n=== INJECTING UTXOs INTO SDK WALLET ===')
-	await injectUTXOsIntoWallet(walletInfo.id, chain, spendableUTXOs)
+	// NOTE: We do NOT inject UTXOs or commitments into SDK's database/merkletree!
+	// We bypass the SDK's transaction flow entirely and use API merkle proofs directly.
+	console.log('✅ Using API-first approach - no SDK database/merkletree injection needed')
 
-	// Verify injection by checking SDK wallet's balance
-	console.log('\n=== VERIFYING SDK WALLET BALANCE ===')
-	try {
-		const { balanceForERC20Token, fullWalletForID } = await import('@railgun-community/wallet')
-
-		const fullWallet = fullWalletForID(walletInfo.id)
-
-		// Get token details for formatting
-		const tokenContract = new ethers.Contract(config.token.address, ERC20_ABI, provider)
-		const symbol = await tokenContract.symbol()
-		const decimals = await tokenContract.decimals()
-
-		const sdkSpendableBalance = await balanceForERC20Token(
-			TXIDVersion.V2_PoseidonMerkle,
-			fullWallet,
-			NetworkName.BNBChain,
-			config.token.address,
-			true // onlySpendable
-		)
-
-		const sdkTotalBalance = await balanceForERC20Token(
-			TXIDVersion.V2_PoseidonMerkle,
-			fullWallet,
-			NetworkName.BNBChain,
-			config.token.address,
-			false // all UTXOs
-		)
-
-		console.log('[SDK Wallet Balance After Injection]')
-		console.log('  Spendable:', ethers.formatUnits(sdkSpendableBalance, decimals), symbol)
-		console.log('  Total:', ethers.formatUnits(sdkTotalBalance, decimals), symbol)
-
-		if (sdkSpendableBalance === 0n) {
-			console.warn('⚠️  WARNING: SDK wallet still shows 0 balance after injection!')
-		} else {
-			console.log('✅ SDK wallet successfully sees injected UTXOs')
-		}
-	} catch (error) {
-		console.error('Failed to verify SDK wallet balance:', error)
-	}
-
-	const totalAvailable = spendableUTXOs.reduce((sum, utxo) => sum + utxo.txo.note.value, 0n)
-	console.log(`Total available: ${ethers.formatUnits(totalAvailable, config.token.decimals || 18)}`)
-
-	if (totalAvailable < config.amount) {
-		throw new Error(
-			`Insufficient balance: need ${ethers.formatUnits(config.amount, config.token.decimals || 18)}, have ${ethers.formatUnits(totalAvailable, config.token.decimals || 18)}`
-		)
-	}
-
-	const selectedUTXOs: typeof spendableUTXOs = []
-	let selectedTotal = 0n
-
-	for (const utxo of spendableUTXOs) {
-		selectedUTXOs.push(utxo)
-		selectedTotal += utxo.txo.note.value
-		if (selectedTotal >= config.amount) {
-			break
-		}
-	}
+	// Calculate total available AFTER contract fees
+	const totalAvailableRaw = spendableUTXOs.reduce((sum, utxo) => sum + utxo.txo.note.value, 0n)
+	const totalAvailableAfterFees = calculateInclusiveFee(totalAvailableRaw, unshieldFee).base
 
 	console.log(
-		`Selected ${selectedUTXOs.length} UTXOs with total value ${ethers.formatUnits(selectedTotal, config.token.decimals || 18)}`
+		`Total available (raw): ${ethers.formatUnits(totalAvailableRaw, config.token.decimals || 18)}`
+	)
+	console.log(
+		`Total available (after ${(Number(unshieldFee) / 100).toFixed(2)}% fee): ${ethers.formatUnits(totalAvailableAfterFees, config.token.decimals || 18)}`
+	)
+
+	if (totalAvailableAfterFees < config.amount) {
+		throw new Error(
+			`Insufficient balance after fees: need ${ethers.formatUnits(config.amount, config.token.decimals || 18)}, have ${ethers.formatUnits(totalAvailableAfterFees, config.token.decimals || 18)} (after ${(Number(unshieldFee) / 100).toFixed(2)}% contract fee)`
+		)
+	}
+
+	// Calculate how much we need to unshield (including fees) to receive config.amount
+	const requiredUnshieldAmount = calculateRequiredUnshieldAmount(config.amount, unshieldFee)
+	console.log(
+		`Target receive amount: ${ethers.formatUnits(config.amount, config.token.decimals || 18)}`
+	)
+	console.log(
+		`Required unshield amount (incl. fee): ${ethers.formatUnits(requiredUnshieldAmount, config.token.decimals || 18)}`
+	)
+
+	// SIMPLIFICATION: Just use the first available UTXO
+	// This avoids complexity with fee calculations and partial spends
+	const selectedUTXOs = spendableUTXOs.slice(0, 1)
+
+	if (selectedUTXOs.length === 0) {
+		throw new Error('No spendable UTXOs available')
+	}
+
+	const { base: selectedTotalReceivable } = calculateInclusiveFee(
+		selectedUTXOs[0].txo.note.value,
+		unshieldFee
+	)
+
+	const selectedTotalValue = selectedUTXOs.reduce((sum, utxo) => sum + utxo.txo.note.value, 0n)
+	console.log(
+		`Selected ${selectedUTXOs.length} UTXOs with total value ${ethers.formatUnits(selectedTotalValue, config.token.decimals || 18)}`
+	)
+	console.log(
+		`You will receive (after 0.25% fee): ${ethers.formatUnits(selectedTotalReceivable, config.token.decimals || 18)}`
 	)
 
 	// Get token details
@@ -425,111 +417,135 @@ async function unshieldTokensAPI(config: UnshieldConfig) {
 	// Process each UTXO individually
 	for (let i = 0; i < selectedUTXOs.length; i++) {
 		const utxo = selectedUTXOs[i]
-		const remainingAmount = config.amount - totalUnshielded
 
-		// Determine how much to unshield from this UTXO
-		// Use the full UTXO value (or remaining amount, whichever is smaller)
-		const unshieldAmount =
-			utxo.txo.note.value < remainingAmount ? utxo.txo.note.value : remainingAmount
+		// Check if we've already reached the target BEFORE processing this UTXO
+		if (totalUnshielded >= config.amount) {
+			console.log(
+				`\n✅ Target amount already reached (${ethers.formatUnits(totalUnshielded, decimals)}/${ethers.formatUnits(config.amount, decimals)} ${symbol}), skipping remaining ${selectedUTXOs.length - i} UTXO(s)`
+			)
+			break
+		}
+		const remainingAmountNeeded = config.amount - totalUnshielded
+
+		// Calculate how much we need to unshield to get remainingAmountNeeded (after fees)
+		const requiredUnshieldForRemaining = calculateRequiredUnshieldAmount(
+			remainingAmountNeeded,
+			unshieldFee
+		)
+
+		// Determine how much to actually unshield from this UTXO
+		// IMPORTANT: For now, always unshield the FULL UTXO value (no change)
+		// Partial unshield requires 1x2 circuit support which we haven't implemented yet
+		const unshieldAmount = utxo.txo.note.value
+
+		// Calculate actual amount user will receive (after contract fee deduction)
+		const { base: actualReceiveAmount, fee: contractFee } = calculateInclusiveFee(
+			unshieldAmount,
+			unshieldFee
+		)
 
 		console.log(
 			`\n=== UNSHIELDING UTXO ${i + 1}/${selectedUTXOs.length} (Position ${utxo.txo.position}) ===`
 		)
-		console.log(`Amount: ${ethers.formatUnits(unshieldAmount, decimals)} ${symbol}`)
+		console.log(`UTXO value: ${ethers.formatUnits(utxo.txo.note.value, decimals)} ${symbol}`)
 		console.log(
-			`Progress: ${ethers.formatUnits(totalUnshielded + unshieldAmount, decimals)}/${ethers.formatUnits(config.amount, decimals)} ${symbol}`
+			`Unshield amount (incl. fee): ${ethers.formatUnits(unshieldAmount, decimals)} ${symbol}`
+		)
+		console.log(
+			`Contract fee (${(Number(unshieldFee) / 100).toFixed(2)}%): ${ethers.formatUnits(contractFee, decimals)} ${symbol}`
+		)
+		console.log(`You will receive: ${ethers.formatUnits(actualReceiveAmount, decimals)} ${symbol}`)
+		console.log(
+			`Progress: ${ethers.formatUnits(totalUnshielded + actualReceiveAmount, decimals)}/${ethers.formatUnits(config.amount, decimals)} ${symbol}`
 		)
 
-		const erc20AmountRecipients: RailgunERC20AmountRecipient[] = [
-			{
-				tokenAddress: config.token.address,
-				amount: unshieldAmount,
-				recipientAddress: config.recipientAddress
-			}
-		]
+		// === API-FIRST PROOF GENERATION ===
+		// Step 1: Derive wallet keys (needed for proof inputs)
+		console.log('\nDeriving Railgun keys...')
+		const nodes = deriveNodes(mnemonic, 0) // wallet index 0
+		const nullifyingKey = await nodes.viewing.getNullifyingKey()
+		const spendingKeyPair = nodes.spending.getSpendingKeyPair()
 
-		// Generate proof (this takes time!)
+		// Step 2: Build proof inputs using API merkle proof
+		console.log('Building proof inputs from API merkle proof...')
+		const { privateInputs, publicInputs } = buildUnshieldProofInputs({
+			utxo: utxo.txo,
+			merkleProof: utxo.merkleProof, // ← From B402 API!
+			nullifyingKey,
+			spendingKeyPair,
+			unshieldAmount,
+			unshieldToAddress: config.recipientAddress,
+			tokenAddress: config.token.address
+		})
+
+		console.log('✅ Proof inputs built from API data')
+		console.log(`  Merkle root: 0x${publicInputs.merkleRoot.toString(16)}`)
+		console.log(`  Nullifier: 0x${publicInputs.nullifiers[0].toString(16)}`)
+
+		// Step 3: Generate ZK proof using SDK's prover
 		console.log('\nGenerating zero-knowledge proof (this may take 10-30 seconds)...')
 		const proofStartTime = Date.now()
 
-		await generateUnshieldProof(
-			TXIDVersion.V2_PoseidonMerkle,
-			NetworkName.BNBChain,
-			walletInfo.id,
-			encryptionKey,
-			erc20AmountRecipients,
-			[],
-			broadcasterFeeRecipient, // Broadcaster fee (undefined in eoa mode)
-			sendWithPublicWallet, // true for eoa mode, false for broadcaster mode
-			gasPrice, // overallBatchMinGasPrice
-			() => console.log('Proof generation in progress...')
-		)
+		const proof = await generateProofManually({
+			privateInputs,
+			publicInputs,
+			chain,
+			txidVersion: TXIDVersion.V2_PoseidonMerkle,
+			unshieldToAddress: config.recipientAddress,
+			treeNumber: utxo.txo.tree,
+			tokenAddress: config.token.address,
+			unshieldAmount,
+			spendingPrivateKey: spendingKeyPair.privateKey,
+			onProgress: (progress) => {
+				if (progress % 0.25 === 0) {
+					console.log(`  Progress: ${(progress * 100).toFixed(0)}%`)
+				}
+			}
+		})
 
 		const proofTime = ((Date.now() - proofStartTime) / 1000).toFixed(2)
-		console.log(`Proof generated in ${proofTime}s`)
+		console.log(`✅ Proof generated in ${proofTime}s`)
 
-		// Populate transaction with proof
-		console.log('Populating unshield transaction...')
+		// Step 4: Format transaction for Railgun contract
+		console.log('Formatting transaction for Railgun contract...')
+		const transactionStruct = formatUnshieldTransaction({
+			proof,
+			treeNumber: utxo.txo.tree,
+			tokenAddress: config.token.address,
+			recipientAddress: config.recipientAddress,
+			unshieldAmount,
+			chain
+		})
 
-		// Create proper gas details with BigInt values (Type0 for BSC)
-		const gasDetails: TransactionGasDetailsType0 = {
-			evmGasType: EVMGasType.Type0,
-			gasEstimate: estimatedGas,
-			gasPrice: gasPrice
-		}
+		// Get Railgun contract address for this chain
+		// TODO: Make this configurable or fetch from chain config
+		const railgunContractAddress = '0x590162bf4b50F6576a459B75309eE21D92178A10' // BSC Railgun contract (EIP-55 checksummed)
 
-		const populateResponse = await populateProvedUnshield(
-			TXIDVersion.V2_PoseidonMerkle,
-			NetworkName.BNBChain,
-			walletInfo.id,
-			erc20AmountRecipients,
-			[],
-			broadcasterFeeRecipient, // Broadcaster fee (undefined in eoa mode)
-			sendWithPublicWallet, // true for eoa mode, false for broadcaster mode
-			gasPrice, // overallBatchMinGasPrice
-			gasDetails
+		const populateResponse = encodeUnshieldTransaction(transactionStruct, railgunContractAddress)
+		console.log(
+			`✅ Transaction formatted with nullifier: 0x${publicInputs.nullifiers[0].toString(16)}`
 		)
-
-		console.log(`Transaction populated with ${populateResponse.nullifiers?.length || 0} nullifiers`)
 
 		// Send transaction (method depends on mode)
 		let txHash: string
 
 		if (config.mode === 'broadcaster') {
-			// Send via broadcaster
-			console.log('Sending transaction through Waku broadcaster network...')
-
-			if (!selectedBroadcaster) {
-				throw new Error('No broadcaster selected')
-			}
-
-			if (!populateResponse.nullifiers || populateResponse.nullifiers.length === 0) {
-				throw new Error('No nullifiers returned from populateProvedUnshield')
-			}
-
-			const broadcasterTransaction = await BroadcasterTransaction.create(
-				TXIDVersion.V2_PoseidonMerkle, // txidVersionForInputs
-				populateResponse.transaction.to!,
-				populateResponse.transaction.data!,
-				selectedBroadcaster.railgunAddress,
-				selectedBroadcaster.tokenFee.feesID,
-				chain,
-				populateResponse.nullifiers,
-				gasPrice, // overallBatchMinGasPrice
-				false, // useRelayAdapt
-				populateResponse.preTransactionPOIsPerTxidLeafPerList // POI proofs
-			)
-
-			txHash = await broadcasterTransaction.send()
-			console.log('Transaction broadcasted! Hash:', txHash)
+			// TODO: Broadcaster mode not yet implemented for API-first flow
+			// Would need to integrate with BroadcasterTransaction
+			throw new Error('Broadcaster mode not yet implemented for API-first unshield')
 		} else {
 			// Send via EOA directly
-			console.log('Sending transaction directly from EOA...')
+			console.log('\nSending transaction directly from EOA...')
 
 			const wallet = new ethers.Wallet(config.eoaPrivateKey, provider)
-			const tx = await wallet.sendTransaction(populateResponse.transaction)
+			const tx = await wallet.sendTransaction({
+				to: populateResponse.to,
+				data: populateResponse.data,
+				gasLimit: estimatedGas,
+				gasPrice: gasPrice
+			})
 			txHash = tx.hash
-			console.log('Transaction sent! Hash:', txHash)
+			console.log('✅ Transaction sent! Hash:', txHash)
 		}
 
 		// Wait for confirmation
@@ -538,12 +554,12 @@ async function unshieldTokensAPI(config: UnshieldConfig) {
 		console.log('Confirmed in block:', receipt?.blockNumber)
 
 		txHashes.push(txHash)
-		totalUnshielded += unshieldAmount
+		totalUnshielded += actualReceiveAmount
 
-		// Stop if we've unshielded enough
+		// Stop if we've received enough (after fees)
 		if (totalUnshielded >= config.amount) {
 			console.log(
-				`\n✅ Target amount reached: ${ethers.formatUnits(totalUnshielded, decimals)} ${symbol}`
+				`\n✅ Target amount reached: ${ethers.formatUnits(totalUnshielded, decimals)} ${symbol} received`
 			)
 			break
 		}
