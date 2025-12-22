@@ -1,11 +1,5 @@
-/**
- * Manual ZK Proof Generation
- *
- * Bypasses SDK entirely and calls snarkjs directly
- * with manually constructed inputs from API merkle proofs.
- */
 import type { Chain } from '@railgun-community/engine/dist/models/engine-types'
-import { TXIDVersion } from '@railgun-community/engine/dist/models/poi-types'
+import type { TXIDVersion } from '@railgun-community/engine/dist/models/poi-types'
 import type {
 	PrivateInputsRailgun,
 	Proof,
@@ -16,10 +10,9 @@ import { ByteUtils } from '@railgun-community/engine/dist/utils/bytes'
 import { SNARK_PRIME } from '@railgun-community/engine/dist/utils/constants'
 import { keccak256 } from '@railgun-community/engine/dist/utils/hash'
 import { signEDDSA } from '@railgun-community/engine/dist/utils/keys-utils'
-import { poseidon, poseidonHex } from '@railgun-community/engine/dist/utils/poseidon'
-import { getEngine } from '@railgun-community/wallet'
+import { poseidon } from '@railgun-community/engine/dist/utils/poseidon'
 import { ethers } from 'ethers'
-import * as path from 'path'
+import * as path from 'node:path'
 import * as snarkjs from 'snarkjs'
 
 export interface GenerateProofParams {
@@ -35,12 +28,6 @@ export interface GenerateProofParams {
 	onProgress?: (progress: number) => void
 }
 
-/**
- * Generate ZK proof using SDK's prover with manually constructed inputs
- *
- * This bypasses the SDK's transaction generation flow which requires
- * blockchain scanning. We provide all inputs directly from API data.
- */
 export async function generateProofManually(
 	params: GenerateProofParams
 ): Promise<{ proof: Proof; publicInputs: PublicInputsRailgun }> {

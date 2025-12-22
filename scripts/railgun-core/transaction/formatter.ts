@@ -1,17 +1,7 @@
-/**
- * Railgun Transaction Formatter
- *
- * Formats ZK proof and transaction data for Railgun smart contract.
- * Bypasses SDK's populateProvedUnshield() to use API-generated proofs.
- */
 import type { Chain } from '@railgun-community/engine/dist/models/engine-types'
 import type { Proof, PublicInputsRailgun } from '@railgun-community/engine/dist/models/prover-types'
 import { ethers } from 'ethers'
 
-/**
- * Railgun contract transaction structure
- * Matches RailgunSmartWallet.transact() expected format
- */
 export interface RailgunTransactionStruct {
 	proof: {
 		a: { x: string; y: string } // G1Point
@@ -41,9 +31,6 @@ export interface RailgunTransactionStruct {
 	}
 }
 
-/**
- * Format proof and transaction data for Railgun contract
- */
 export function formatUnshieldTransaction(params: {
 	proof: { proof: Proof; publicInputs: PublicInputsRailgun }
 	treeNumber: number

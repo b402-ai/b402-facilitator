@@ -349,7 +349,8 @@ export async function fetchSpendableUTXOs(
 			apiUrl,
 			allCommitments.map((c) => ({
 				commitmentHash: c.commitmentHash,
-				treeNumber: c.treeNumber
+				treeNumber: c.treeNumber,
+				position: c.position
 			}))
 		)
 

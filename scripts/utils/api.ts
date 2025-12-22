@@ -1,8 +1,3 @@
-/**
- * API client for B402 Backend privacy endpoints
- */
-
-// Types for API responses
 export interface ShieldCommitment {
 	commitmentHash: string
 	treeNumber: string
@@ -58,9 +53,6 @@ export interface NullifierScanResponse {
 	unused: string[]
 }
 
-/**
- * Fetch all shield commitments for a given EOA
- */
 export async function fetchCommitmentsByEOA(
 	apiUrl: string,
 	eoa: string
@@ -75,7 +67,6 @@ export async function fetchCommitmentsByEOA(
 		}
 
 		const data = await response.json()
-		// API returns { shields: [...] }
 		return data.shields || []
 	} catch (error) {
 		if (error instanceof Error) {
@@ -85,10 +76,6 @@ export async function fetchCommitmentsByEOA(
 	}
 }
 
-/**
- * Fetch nullifier data (used/unused) in batches
- * Maximum 1000 nullifiers per request
- */
 export async function fetchNullifierData(
 	apiUrl: string,
 	nullifiers: string[]
@@ -122,9 +109,6 @@ export async function fetchNullifierData(
 	}
 }
 
-/**
- * Batch fetch nullifier data for large arrays (automatically splits into batches of 1000)
- */
 export async function fetchNullifierDataBatched(
 	apiUrl: string,
 	nullifiers: string[]
@@ -138,7 +122,6 @@ export async function fetchNullifierDataBatched(
 
 	const results = await Promise.all(batches.map((batch) => fetchNullifierData(apiUrl, batch)))
 
-	// Merge results
 	const mergedResult: NullifierScanResponse = {
 		used: [],
 		unused: []
@@ -163,9 +146,10 @@ export interface MerkleProofResponse {
 export async function fetchMerkleProof(
 	apiUrl: string,
 	commitmentHash: string,
-	treeNumber: string
+	treeNumber: string,
+	position: string
 ): Promise<MerkleProofResponse> {
-	const url = `${apiUrl}/privacy/merkle-proof?commitmentHash=${commitmentHash}&treeNumber=${treeNumber}`
+	const url = `${apiUrl}/privacy/merkle-proof?commitmentHash=${commitmentHash}&treeNumber=${treeNumber}&position=${position}`
 
 	try {
 		const response = await fetch(url)
@@ -183,9 +167,11 @@ export async function fetchMerkleProof(
 
 export async function fetchMerkleProofsBatch(
 	apiUrl: string,
-	requests: Array<{ commitmentHash: string; treeNumber: string }>
+	requests: Array<{ commitmentHash: string; treeNumber: string; position: string }>
 ): Promise<MerkleProofResponse[]> {
 	return Promise.all(
-		requests.map((req) => fetchMerkleProof(apiUrl, req.commitmentHash, req.treeNumber))
+		requests.map((req) =>
+			fetchMerkleProof(apiUrl, req.commitmentHash, req.treeNumber, req.position)
+		)
 	)
 }

@@ -1,13 +1,9 @@
-/**
- * Shared Railgun utilities for shield and unshield operations
- */
 import { ArtifactStore } from '@railgun-community/wallet'
 import { Mnemonic, ethers } from 'ethers'
 import { MemoryLevel } from 'memory-level'
 import { promises as fs } from 'node:fs'
 import * as path from 'node:path'
 
-// Constants
 export const B402_RESERVED_ZK_MESSAGE = 'b402 Reserved Railgun zk-Address'
 
 export const ERC20_ABI = [
@@ -18,39 +14,20 @@ export const ERC20_ABI = [
 	'function symbol() external view returns (string)'
 ] as const
 
-/**
- * Derives a deterministic BIP39 mnemonic from an EOA private key
- * Uses a reserved message signature to ensure deterministic generation
- */
 export async function deriveMnemonicFromEOA(eoaPrivateKey: string): Promise<string> {
 	const wallet = new ethers.Wallet(eoaPrivateKey)
 	const message = B402_RESERVED_ZK_MESSAGE
 	const signature = await wallet.signMessage(message)
-	const entropy = ethers.keccak256(signature).slice(0, 34) // 32 bytes + '0x'
+	const entropy = ethers.keccak256(signature).slice(0, 34)
 	const mnemonic = Mnemonic.fromEntropy(entropy)
-
-	// Debug logging
-	console.log('[DEBUG deriveMnemonicFromEOA]')
-	console.log('  EOA Address:', wallet.address)
-	console.log('  Message:', message)
-	console.log('  Signature:', signature)
-	console.log('  Entropy:', entropy)
-	console.log('  Mnemonic:', mnemonic.phrase)
 
 	return mnemonic.phrase
 }
 
-/**
- * Generates a random 32-byte private key for shield operations
- */
 export function getShieldPrivateKey(): string {
 	return ethers.hexlify(ethers.randomBytes(32))
 }
 
-/**
- * Creates an in-memory artifact store for Railgun operations
- * Useful for shield operations that don't need persistent storage
- */
 export function createInMemoryArtifactStore(): ArtifactStore {
 	const storage = new Map<string, string | Buffer>()
 
@@ -63,7 +40,6 @@ export function createInMemoryArtifactStore(): ArtifactStore {
 			return item
 		},
 		async (_dir: string, path: string, item: string | Uint8Array) => {
-			// Convert Uint8Array to Buffer for storage
 			const storageItem = typeof item === 'string' ? item : Buffer.from(item)
 			storage.set(path, storageItem)
 		},
@@ -73,57 +49,29 @@ export function createInMemoryArtifactStore(): ArtifactStore {
 	)
 }
 
-/**
- * Creates a file-based artifact store for Railgun operations
- * Required for unshield operations that need ZK circuit artifacts
- */
 export function createFileBasedArtifactStore(artifactsDir: string): ArtifactStore {
 	return new ArtifactStore(
 		async (filePath: string) => {
-			console.log('[DEBUG Artifact Store] Requested filePath:', filePath)
 			const fullPath = path.join(artifactsDir, filePath)
-			console.log('[DEBUG Artifact Store] Full path:', fullPath)
-			try {
-				const data = await fs.readFile(fullPath)
-				console.log('[DEBUG Artifact Store] Successfully read', data.length, 'bytes')
-				return data
-			} catch (error) {
-				console.log('[DEBUG Artifact Store] Failed to read:', error)
-				throw error
-			}
+			return await fs.readFile(fullPath)
 		},
-		async (dir: string, filePath: string, item: string | Uint8Array) => {
-			console.log('[DEBUG Artifact Store] Writing artifact:', { dir, filePath })
-			// filePath already contains the full relative path, so use it directly
+		async (_dir: string, filePath: string, item: string | Uint8Array) => {
 			const fullPath = path.join(artifactsDir, filePath)
-			console.log('[DEBUG Artifact Store] Full write path:', fullPath)
-			try {
-				await fs.mkdir(path.dirname(fullPath), { recursive: true })
-				await fs.writeFile(fullPath, item)
-				console.log('[DEBUG Artifact Store] Successfully wrote artifact')
-			} catch (error) {
-				console.log('[DEBUG Artifact Store] Failed to write:', error)
-				throw error
-			}
+			await fs.mkdir(path.dirname(fullPath), { recursive: true })
+			await fs.writeFile(fullPath, item)
 		},
 		async (filePath: string) => {
-			console.log('[DEBUG Artifact Store] Checking exists:', filePath)
 			const fullPath = path.join(artifactsDir, filePath)
 			try {
 				await fs.access(fullPath)
-				console.log('[DEBUG Artifact Store] File exists:', fullPath)
 				return true
 			} catch {
-				console.log('[DEBUG Artifact Store] File does not exist:', fullPath)
 				return false
 			}
 		}
 	)
 }
 
-/**
- * Creates a MemoryLevel database instance for Railgun engine
- */
 export function createMemoryDatabase() {
 	return new MemoryLevel()
 }

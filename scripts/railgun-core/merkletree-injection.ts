@@ -1,11 +1,5 @@
-/**
- * Merkletree Injection Utility
- *
- * Injects commitment data from B402 API into SDK's merkletree,
- * enabling proof generation without blockchain scanning.
- */
 import type { Chain } from '@railgun-community/engine/dist/models/engine-types'
-import { TXIDVersion } from '@railgun-community/engine/dist/models/poi-types'
+import type { TXIDVersion } from '@railgun-community/engine/dist/models/poi-types'
 import { getEngine } from '@railgun-community/wallet'
 
 import type { SpendableUTXO } from '../utils/unshield-api'

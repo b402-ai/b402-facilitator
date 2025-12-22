@@ -1,12 +1,5 @@
-/**
- * API-First Proof Inputs Builder
- *
- * Constructs ZK proof inputs directly from B402 API data,
- * bypassing SDK's merkletree and wallet database entirely.
- */
-import type { ViewingKeyPair } from '@railgun-community/engine/dist/key-derivation/wallet-node'
 import type { SpendingKeyPair } from '@railgun-community/engine/dist/key-derivation/wallet-node'
-import type { Chain } from '@railgun-community/engine/dist/models/engine-types'
+import type {} from '@railgun-community/engine/dist/models/engine-types'
 import type {
 	PrivateInputsRailgun,
 	PublicInputsRailgun
@@ -48,12 +41,6 @@ function convertMerkleProof(apiProof: MerkleProofResponse): {
 	return { elements, indices: indicesBitfield }
 }
 
-/**
- * Build ZK proof inputs from API data
- *
- * This is the core function that enables API-first unshield.
- * All data comes from B402 API - no blockchain scanning needed.
- */
 export function buildUnshieldProofInputs(inputs: UnshieldInputs): {
 	privateInputs: PrivateInputsRailgun
 	publicInputs: PublicInputsRailgun
@@ -68,22 +55,8 @@ export function buildUnshieldProofInputs(inputs: UnshieldInputs): {
 		tokenAddress
 	} = inputs
 
-	console.log('[DEBUG buildUnshieldProofInputs] Input values:')
-	console.log('  utxo.position:', utxo.position)
-	console.log('  utxo.note.random:', utxo.note.random)
-	console.log('  utxo.note.value:', utxo.note.value)
-	console.log('  utxo.note.notePublicKey:', utxo.note.notePublicKey)
-	console.log('  tokenAddress:', tokenAddress)
-	console.log('  unshieldAmount:', unshieldAmount)
-	console.log('  spendingKeyPair.pubkey:', spendingKeyPair.pubkey)
-	console.log('  merkleProof.root:', merkleProof.root)
-	console.log('  merkleProof.proof length:', merkleProof.proof.length)
-
 	// Convert API merkle proof to SDK format
 	const { elements: pathElements, indices: leavesIndices } = convertMerkleProof(merkleProof)
-
-	// Calculate INPUT commitment (the one in the merkle tree that we're spending)
-	// This should match the blinded commitment at the UTXO position
 	const inputCommitment = ByteUtils.hexToBigInt(
 		poseidonHex([
 			ByteUtils.nToHex(utxo.note.notePublicKey, ByteLength.UINT_256),
@@ -91,7 +64,50 @@ export function buildUnshieldProofInputs(inputs: UnshieldInputs): {
 			ByteUtils.nToHex(utxo.note.value, ByteLength.UINT_256)
 		])
 	)
-	console.log('[DEBUG] Calculated input commitment:', `0x${inputCommitment.toString(16)}`)
+	console.log(
+		'[DEBUG] Calculated input commitment:',
+		`0x${inputCommitment.toString(16).padStart(64, '0')}`
+	)
+	console.log('[DEBUG] Expected commitment (from API):', utxo.blindedCommitment)
+	console.log(
+		'[DEBUG] Commitments match:',
+		utxo.blindedCommitment.toLowerCase() ===
+			`0x${inputCommitment.toString(16).padStart(64, '0')}`.toLowerCase()
+	)
+
+	// Manually verify the merkle proof using API pathIndices directly
+	console.log('[DEBUG] Manually verifying merkle proof...')
+	console.log('[DEBUG] API pathIndices:', merkleProof.pathIndices)
+	let computedHash = inputCommitment
+	for (let i = 0; i < pathElements.length; i++) {
+		const isRight = merkleProof.pathIndices[i] === 1
+		const siblingHash = pathElements[i]
+		const prevHash = computedHash
+
+		if (isRight) {
+			// Current node is right child, so sibling (left child) goes first
+			computedHash = ByteUtils.hexToBigInt(
+				poseidonHex([
+					ByteUtils.nToHex(siblingHash, ByteLength.UINT_256),
+					ByteUtils.nToHex(computedHash, ByteLength.UINT_256)
+				])
+			)
+			console.log(
+				`[DEBUG]   Level ${i}: RIGHT - poseidon(0x${siblingHash.toString(16).slice(0, 8)}..., 0x${prevHash.toString(16).slice(0, 8)}...) = 0x${computedHash.toString(16).slice(0, 8)}...`
+			)
+		} else {
+			// Current node is left child, so sibling (right child) goes second
+			computedHash = ByteUtils.hexToBigInt(
+				poseidonHex([
+					ByteUtils.nToHex(computedHash, ByteLength.UINT_256),
+					ByteUtils.nToHex(siblingHash, ByteLength.UINT_256)
+				])
+			)
+			console.log(
+				`[DEBUG]   Level ${i}: LEFT - poseidon(0x${prevHash.toString(16).slice(0, 8)}..., 0x${siblingHash.toString(16).slice(0, 8)}...) = 0x${computedHash.toString(16).slice(0, 8)}...`
+			)
+		}
+	}
 
 	// Calculate nullifier
 	const nullifier = TransactNote.getNullifier(nullifyingKey, utxo.position)
