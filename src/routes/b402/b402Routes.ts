@@ -33,7 +33,8 @@ import {
 	verify,
 	verifyDeploymentByEOA,
 	verifyDeploymentBySmartWallet,
-	verifyWalletPayment
+	verifyWalletPayment,
+	unshield
 } from './b402Controller'
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -196,6 +197,9 @@ export const register = (server: FastifyInstance, _: any, next: any) => {
 		},
 		health
 	)
+
+	// Privacy - Unshield (generates ZK proof and unsigned transaction)
+	server.post('/privacy/unshield', unshield)
 
 	next()
 }

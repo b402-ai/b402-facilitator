@@ -1982,3 +1982,33 @@ export async function health(request: FastifyRequest, reply: FastifyReply) {
 		return handleAndReturnErrorResponse(reply, error)
 	}
 }
+
+/**
+ * Function for route `/privacy/unshield`
+ * Generates ZK proof and unsigned transaction for unshielding Railgun tokens
+ *
+ * @param request
+ * @param reply
+ * @returns
+ */
+export async function unshield(request: FastifyRequest, reply: FastifyReply) {
+	try {
+		const { generateUnshieldTransaction } = await import('../../services/privacy/unshield')
+		const body = request.body as {
+			signature: string
+			amount: string
+			tokenAddress: string
+			recipientAddress: string
+		}
+
+		const result = await generateUnshieldTransaction(body)
+
+		if (!result.success) {
+			return reply.status(400).send(result)
+		}
+
+		return result
+	} catch (error) {
+		return handleAndReturnErrorResponse(reply, error)
+	}
+}
