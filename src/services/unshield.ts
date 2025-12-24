@@ -22,6 +22,7 @@ import {
 } from '../../scripts/utils/railgun-fees'
 
 export const B402_RESERVED_ZK_MESSAGE = 'b402 Reserved Railgun zk-Address'
+const DEBUG_PRIVACY = process.env.DEBUG_PRIVACY === '1'
 
 const BSC_RPC_URL = process.env.BSC_RPC_URL || 'https://bsc-dataseed.binance.org'
 const RAILGUN_CONTRACT_ADDRESS = '0x590162bf4b50F6576a459B75309eE21D92178A10'
@@ -87,25 +88,26 @@ export async function generateUnshieldTransaction(
 	try {
 		// Verify signature and recover address
 		const signerAddress = ethers.verifyMessage(B402_RESERVED_ZK_MESSAGE, signature)
-		console.log('[Unshield Service] Signer address:', signerAddress)
+		if (DEBUG_PRIVACY) console.log('[Unshield Service] Signer address:', signerAddress)
 
 		// Derive keys from signature
 		const mnemonic = deriveMnemonicFromSignature(signature)
 		const walletNodes = deriveNodes(mnemonic, 0)
 		const nullifyingKey = await walletNodes.viewing.getNullifyingKey()
 		const spendingKeyPair = walletNodes.spending.getSpendingKeyPair()
-		console.log('[Unshield Service] Derived keys from signature')
+		if (DEBUG_PRIVACY) console.log('[Unshield Service] Derived keys from signature')
 
 		// Parse amount
 		const amountWei = BigInt(amount)
-		console.log('[Unshield Service] Amount:', ethers.formatUnits(amountWei, 18))
+		if (DEBUG_PRIVACY) console.log('[Unshield Service] Amount:', ethers.formatUnits(amountWei, 18))
 
 		// Fetch unshield fee
 		const unshieldFee = await fetchUnshieldFee(BSC_RPC_URL, RAILGUN_CONTRACT_ADDRESS)
-		console.log(`[Unshield Service] Unshield fee: ${(Number(unshieldFee) / 100).toFixed(2)}%`)
+		if (DEBUG_PRIVACY)
+			console.log(`[Unshield Service] Unshield fee: ${(Number(unshieldFee) / 100).toFixed(2)}%`)
 
 		// Fetch spendable UTXOs
-		console.log('[Unshield Service] Fetching spendable UTXOs...')
+		if (DEBUG_PRIVACY) console.log('[Unshield Service] Fetching spendable UTXOs...')
 		const { spendableUTXOs, totalCommitments, spendableCount } = await fetchSpendableUTXOsFromSignature(
 			FACILITATOR_API_URL,
 			signature,
@@ -114,9 +116,11 @@ export async function generateUnshieldTransaction(
 			tokenAddress
 		)
 
-		console.log(`[Unshield Service] Total commitments: ${totalCommitments}`)
-		console.log(`[Unshield Service] Spendable: ${spendableCount}`)
-		console.log(`[Unshield Service] For token ${tokenAddress}: ${spendableUTXOs.length}`)
+		if (DEBUG_PRIVACY) {
+			console.log(`[Unshield Service] Total commitments: ${totalCommitments}`)
+			console.log(`[Unshield Service] Spendable: ${spendableCount}`)
+			console.log(`[Unshield Service] For token ${tokenAddress}: ${spendableUTXOs.length}`)
+		}
 
 		if (spendableUTXOs.length === 0) {
 			return {
@@ -131,8 +135,14 @@ export async function generateUnshieldTransaction(
 		}, 0n)
 		const totalAvailableAfterFees = calculateInclusiveFee(totalAvailableRaw, unshieldFee).base
 
-		console.log(`[Unshield Service] Total available (raw): ${ethers.formatUnits(totalAvailableRaw, 18)}`)
-		console.log(`[Unshield Service] Total available (after fee): ${ethers.formatUnits(totalAvailableAfterFees, 18)}`)
+		if (DEBUG_PRIVACY) {
+			console.log(
+				`[Unshield Service] Total available (raw): ${ethers.formatUnits(totalAvailableRaw, 18)}`
+			)
+			console.log(
+				`[Unshield Service] Total available (after fee): ${ethers.formatUnits(totalAvailableAfterFees, 18)}`
+			)
+		}
 
 		if (totalAvailableAfterFees < amountWei) {
 			return {
@@ -155,9 +165,11 @@ export async function generateUnshieldTransaction(
 			return { success: false, error: 'No spendable UTXOs selected' }
 		}
 
-		console.log(
-			`[Unshield Service] Will unshield ${selectedUTXOs.length} UTXO(s) to reach target receive amount`
-		)
+		if (DEBUG_PRIVACY) {
+			console.log(
+				`[Unshield Service] Will unshield ${selectedUTXOs.length} UTXO(s) to reach target receive amount`
+			)
+		}
 
 		// Get gas estimate once (BSC type0).
 		const provider = new ethers.JsonRpcProvider(BSC_RPC_URL)
@@ -183,12 +195,14 @@ export async function generateUnshieldTransaction(
 				unshieldFee
 			)
 
-			console.log(
-				`[Unshield Service] UTXO ${i + 1}/${selectedUTXOs.length} position=${selectedUTXO.txo.position} unshield=${ethers.formatUnits(unshieldAmount, 18)} receive=${ethers.formatUnits(actualReceiveAmount, 18)}`
-			)
+			if (DEBUG_PRIVACY) {
+				console.log(
+					`[Unshield Service] UTXO ${i + 1}/${selectedUTXOs.length} position=${selectedUTXO.txo.position} unshield=${ethers.formatUnits(unshieldAmount, 18)} receive=${ethers.formatUnits(actualReceiveAmount, 18)}`
+				)
+			}
 
 			// Build proof inputs
-			console.log('[Unshield Service] Building proof inputs...')
+			if (DEBUG_PRIVACY) console.log('[Unshield Service] Building proof inputs...')
 			const { privateInputs, publicInputs } = buildUnshieldProofInputs({
 				utxo: selectedUTXO.txo,
 				merkleProof: selectedUTXO.merkleProof,
@@ -200,7 +214,7 @@ export async function generateUnshieldTransaction(
 			})
 
 			// Generate proof
-			console.log('[Unshield Service] Generating ZK proof...')
+			if (DEBUG_PRIVACY) console.log('[Unshield Service] Generating ZK proof...')
 			const proofStartTime = Date.now()
 
 			const proof = await generateProofManually({
@@ -216,7 +230,7 @@ export async function generateUnshieldTransaction(
 			})
 
 			const proofTime = ((Date.now() - proofStartTime) / 1000).toFixed(2)
-			console.log(`[Unshield Service] Proof generated in ${proofTime}s`)
+			if (DEBUG_PRIVACY) console.log(`[Unshield Service] Proof generated in ${proofTime}s`)
 
 			// Format transaction
 			const transactionStruct = formatUnshieldTransaction({
@@ -264,6 +278,7 @@ export async function generateUnshieldTransaction(
 			totalContractFee: totalContractFee.toString()
 		}
 	} catch (error) {
+		// keep errors (but avoid logging the full request body)
 		console.error('[Unshield Service] Error:', error)
 		return {
 			success: false,
