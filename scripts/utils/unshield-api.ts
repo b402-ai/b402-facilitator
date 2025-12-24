@@ -189,6 +189,215 @@ async function decryptTransactCommitment(
 	}
 }
 
+/**
+ * Signature-based spendable UTXO discovery.
+ *
+ * Used by the facilitator API so the client never has to send an EOA private key.
+ * The signature is expected to be for `B402_RESERVED_ZK_MESSAGE`.
+ */
+export async function fetchSpendableUTXOsFromSignature(
+	apiUrl: string,
+	signature: string,
+	signerAddress: string,
+	chain: Chain,
+	tokenAddress?: string
+): Promise<FetchUTXOsResult> {
+	const shields = await fetchCommitmentsByEOA(apiUrl, signerAddress)
+	if (shields.length === 0) {
+		return { spendableUTXOs: [], totalCommitments: 0, spendableCount: 0 }
+	}
+
+	const { ethers, Mnemonic } = await import('ethers')
+	const entropy = ethers.keccak256(signature).slice(0, 34)
+	const mnemonic = Mnemonic.fromEntropy(entropy).phrase
+
+	const walletNodes = deriveNodes(mnemonic, 0)
+	const viewingKeyPair = await walletNodes.viewing.getViewingKeyPair()
+	const spendingKeyPair = walletNodes.spending.getSpendingKeyPair()
+
+	// Compute nullifying key from viewing node's private key (same as SDK wallet)
+	const { poseidonHex } = await import('@railgun-community/engine/dist/utils/poseidon')
+	const { ByteUtils } = await import('@railgun-community/engine/dist/utils/bytes')
+	const { WalletNode } = await import('@railgun-community/engine/dist/key-derivation/wallet-node')
+
+	const nullifyingKey = ByteUtils.hexToBigInt(
+		poseidonHex([ByteUtils.fastBytesToHex(viewingKeyPair.privateKey)])
+	)
+
+	// Build master public key using SDK's method
+	const masterPublicKey = WalletNode.getMasterPublicKey(spendingKeyPair.pubkey, nullifyingKey)
+
+	const addressData: AddressData = {
+		masterPublicKey,
+		viewingPublicKey: viewingKeyPair.pubkey
+	}
+
+	const allCommitments: Array<{
+		commitmentHash: string
+		treeNumber: string
+		position: string
+		tokenAddress: string
+		note: TransactNote
+		source: 'shield' | 'transact'
+	}> = []
+
+	const processedNullifiers = new Set<string>()
+
+	const queue: Array<{
+		commitmentHash: string
+		treeNumber: string
+		position: string
+		tokenAddress: string
+		source: 'shield' | 'transact'
+		shieldData?: ShieldCommitment
+		transactData?: OutputCommitment
+	}> = shields.map((s) => ({
+		commitmentHash: s.commitmentHash,
+		treeNumber: s.treeNumber,
+		position: s.position,
+		tokenAddress: s.tokenAddress,
+		source: 'shield' as const,
+		shieldData: s
+	}))
+
+	while (queue.length > 0) {
+		const batch = queue.splice(0, Math.min(queue.length, 100))
+
+		const batchWithNullifiers: Array<{
+			commitment: (typeof batch)[0]
+			nullifier: string
+		}> = []
+
+		for (const commitment of batch) {
+			const position = Number.parseInt(commitment.position, 10)
+			const nullifier = computeNullifier(nullifyingKey, position)
+
+			if (processedNullifiers.has(nullifier.toLowerCase())) {
+				continue
+			}
+
+			batchWithNullifiers.push({ commitment, nullifier })
+			processedNullifiers.add(nullifier.toLowerCase())
+		}
+
+		if (batchWithNullifiers.length === 0) {
+			continue
+		}
+
+		const nullifiers = batchWithNullifiers.map((b) => b.nullifier)
+		const nullifierStatus = await fetchNullifierDataBatched(apiUrl, nullifiers)
+
+		const unusedSet = new Set(nullifierStatus.unused.map((n) => n.toLowerCase()))
+		const usedMap = new Map(nullifierStatus.used.map((u) => [u.nullifier.toLowerCase(), u]))
+
+		for (const { commitment, nullifier } of batchWithNullifiers) {
+			const nullifierLower = nullifier.toLowerCase()
+
+			let decryptedNote: TransactNote | null = null
+
+			if (commitment.source === 'shield' && commitment.shieldData) {
+				decryptedNote = await decryptShieldCommitment(
+					commitment.shieldData,
+					viewingKeyPair,
+					addressData,
+					chain
+				)
+			} else if (commitment.source === 'transact' && commitment.transactData) {
+				const result = await decryptTransactCommitment(
+					commitment.transactData,
+					viewingKeyPair,
+					addressData,
+					chain
+				)
+				if (result) {
+					decryptedNote = result.note
+					commitment.tokenAddress = result.tokenAddress
+				}
+			}
+
+			if (!decryptedNote) {
+				continue
+			}
+
+			if (unusedSet.has(nullifierLower)) {
+				if (tokenAddress && commitment.tokenAddress.toLowerCase() !== tokenAddress.toLowerCase()) {
+					continue
+				}
+
+				allCommitments.push({
+					commitmentHash: commitment.commitmentHash,
+					treeNumber: commitment.treeNumber,
+					position: commitment.position,
+					tokenAddress: commitment.tokenAddress,
+					note: decryptedNote,
+					source: commitment.source
+				})
+			} else if (usedMap.has(nullifierLower)) {
+				const usedData = usedMap.get(nullifierLower)
+				if (usedData && usedData.type === 'TRANSACT' && usedData.outputCommitments) {
+					for (const output of usedData.outputCommitments) {
+						queue.push({
+							commitmentHash: output.commitmentHash,
+							treeNumber: commitment.treeNumber,
+							position: output.position,
+							tokenAddress: '',
+							source: 'transact',
+							transactData: output
+						})
+					}
+				}
+			}
+		}
+	}
+
+	if (allCommitments.length === 0) {
+		return {
+			spendableUTXOs: [],
+			totalCommitments: shields.length,
+			spendableCount: 0
+		}
+	}
+
+	const merkleProofs = await fetchMerkleProofsBatch(
+		apiUrl,
+		allCommitments.map((c) => ({
+			commitmentHash: c.commitmentHash,
+			treeNumber: c.treeNumber,
+			position: c.position
+		}))
+	)
+
+	const spendableUTXOs: SpendableUTXO[] = await Promise.all(
+		allCommitments.map(async (commitment, index) => {
+			const txo: TXO = {
+				tree: Number.parseInt(commitment.treeNumber, 10),
+				position: Number.parseInt(commitment.position, 10),
+				txid: '',
+				timestamp: undefined,
+				blockNumber: 0,
+				spendtxid: false,
+				nullifier: computeNullifier(nullifyingKey, Number.parseInt(commitment.position, 10)),
+				note: commitment.note,
+				poisPerList: undefined,
+				blindedCommitment: commitment.commitmentHash,
+				commitmentType: CommitmentType.ShieldCommitment,
+				transactCreationRailgunTxid: undefined
+			}
+
+			return {
+				txo,
+				merkleProof: merkleProofs[index]
+			}
+		})
+	)
+
+	return {
+		spendableUTXOs,
+		totalCommitments: shields.length,
+		spendableCount: allCommitments.length
+	}
+}
+
 export async function fetchSpendableUTXOs(
 	apiUrl: string,
 	eoaPrivateKey: string,
