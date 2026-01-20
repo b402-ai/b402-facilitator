@@ -850,3 +850,104 @@ export interface GetMasterWalletAddressResponse {
 	masterWalletAddress: string
 	salt: string
 }
+
+// ============================================
+// Wallet Batch Schemas (Generic batch UserOp execution)
+// ============================================
+
+export const WalletCallSchema = {
+	type: 'object',
+	properties: {
+		to: { type: 'string' },
+		value: { type: 'string' },
+		data: { type: 'string' }
+	},
+	required: ['to', 'value', 'data'],
+	additionalProperties: false
+} as const
+
+export const WalletBatchVerifyRequestSchema = {
+	type: 'object',
+	properties: {
+		ownerEOA: { type: 'string' },
+		walletAddress: { type: 'string' },
+		salt: { type: 'string' },
+		calls: { type: 'array', items: WalletCallSchema }
+	},
+	required: ['ownerEOA', 'walletAddress', 'calls'],
+	additionalProperties: false
+} as const
+
+export const WalletBatchVerifyResponseSchema = {
+	type: 'object',
+	properties: {
+		isValid: { type: 'boolean' },
+		userOp: { type: 'object', additionalProperties: true },
+		userOpHash: { type: 'string' },
+		needsDeployment: { type: 'boolean' },
+		invalidReason: { type: 'string' }
+	},
+	required: ['isValid'],
+	additionalProperties: false
+} as const
+
+export const WalletBatchSettleRequestSchema = {
+	type: 'object',
+	properties: {
+		userOp: { type: 'object', additionalProperties: true },
+		simulate: { type: 'boolean' },
+		pollingTimeout: { type: 'number' }
+	},
+	required: ['userOp'],
+	additionalProperties: false
+} as const
+
+export const WalletBatchSettleResponseSchema = {
+	type: 'object',
+	properties: {
+		success: { type: 'boolean' },
+		userOpHash: { type: 'string' },
+		txHash: { type: 'string' },
+		errorReason: { type: 'string' }
+	},
+	required: ['success'],
+	additionalProperties: false
+} as const
+
+// ============================================
+// Wallet Batch TypeScript Interfaces
+// ============================================
+
+export interface WalletCall {
+	to: string
+	value: string
+	data: string
+}
+
+export interface WalletBatchVerifyRequest {
+	ownerEOA: string
+	walletAddress: string
+	salt?: string
+	calls: WalletCall[]
+}
+
+export interface WalletBatchVerifyResponse {
+	isValid: boolean
+	userOp?: UserOperation
+	userOpHash?: string
+	needsDeployment?: boolean
+	invalidReason?: string
+}
+
+export interface WalletBatchSettleRequest {
+	userOp: UserOperation
+	simulate?: boolean
+	pollingTimeout?: number
+}
+
+export interface WalletBatchSettleResponse {
+	success: boolean
+	userOpHash?: string
+	txHash?: string
+	errorReason?: string
+}

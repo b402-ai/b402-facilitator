@@ -19,7 +19,11 @@ import {
 	VerifyRequestSchema,
 	VerifyResponseSchema,
 	VerifyWalletPaymentRequestSchema,
-	VerifyWalletPaymentResponseSchema
+	VerifyWalletPaymentResponseSchema,
+	WalletBatchVerifyRequestSchema,
+	WalletBatchVerifyResponseSchema,
+	WalletBatchSettleRequestSchema,
+	WalletBatchSettleResponseSchema
 } from '../../schema/b402'
 import {
 	claimWalletDeployment,
@@ -33,7 +37,9 @@ import {
 	verify,
 	verifyDeploymentByEOA,
 	verifyDeploymentBySmartWallet,
-	verifyWalletPayment
+	verifyWalletPayment,
+	walletBatchVerify,
+	walletBatchSettle
 } from './b402Controller'
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -195,6 +201,34 @@ export const register = (server: FastifyInstance, _: any, next: any) => {
 			}
 		},
 		health
+	)
+
+	// Wallet Batch Operations (approve+shield, etc.)
+
+	server.post(
+		'/wallet/batch/verify',
+		{
+			schema: {
+				body: WalletBatchVerifyRequestSchema,
+				response: {
+					200: WalletBatchVerifyResponseSchema
+				}
+			}
+		},
+		walletBatchVerify
+	)
+
+	server.post(
+		'/wallet/batch/settle',
+		{
+			schema: {
+				body: WalletBatchSettleRequestSchema,
+				response: {
+					200: WalletBatchSettleResponseSchema
+				}
+			}
+		},
+		walletBatchSettle
 	)
 
 	next()

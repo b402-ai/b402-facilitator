@@ -20,7 +20,11 @@ import type {
 	VerifyRequest,
 	VerifyResponse,
 	VerifyWalletRequest,
-	VerifyWalletResponse
+	VerifyWalletResponse,
+	WalletBatchVerifyRequest,
+	WalletBatchVerifyResponse,
+	WalletBatchSettleRequest,
+	WalletBatchSettleResponse
 } from '../../schema/b402'
 import { env } from '../../schema/env'
 import { BaseErrors, handleAndReturnErrorResponse } from '../../schema/errors'
@@ -33,6 +37,7 @@ import {
 	decodeExecuteBatch,
 	encodeExecuteBatch,
 	getUserOpReceipt,
+	simulateUserOp,
 	submitUserOpToBundler,
 	validateFeeIncluded
 } from '../../utils/userOp'
@@ -1982,3 +1987,290 @@ export async function health(request: FastifyRequest, reply: FastifyReply) {
 		return handleAndReturnErrorResponse(reply, error)
 	}
 }
+
+/**
+ * Function for route `/wallet/batch/verify`
+ * Build UserOp for batch operations (approve + shield, or just unshield)
+ * Generic handler that accepts any calls[] array
+ *
+ * @param request
+ * @param reply
+ * @returns
+ */
+export async function walletBatchVerify(request: FastifyRequest, reply: FastifyReply) {
+	try {
+		const body = request.body as WalletBatchVerifyRequest
+		const { ownerEOA, walletAddress, salt, calls } = body
+
+		// Validate addresses
+		if (!ethers.isAddress(ownerEOA)) {
+			throw new BaseErrors.ERR_INVALID_ADDRESS()
+		}
+		if (!ethers.isAddress(walletAddress)) {
+			throw new BaseErrors.ERR_INVALID_ADDRESS()
+		}
+
+		// Validate calls array
+		if (!calls || calls.length === 0) {
+			const response: WalletBatchVerifyResponse = {
+				isValid: false,
+				invalidReason: 'No calls provided'
+			}
+			return response
+		}
+
+		// Check if smart wallet is already deployed
+		const needsDeployment = !(await isWalletDeployed(walletAddress))
+
+		// Build batch calls for the UserOp
+		const batchCalls: BatchCall[] = calls.map((call) => ({
+			to: call.to,
+			value: call.value,
+			data: call.data
+		}))
+
+		const callData = encodeExecuteBatch(batchCalls)
+		const walletNonce = needsDeployment ? 0 : await getWalletNonce(walletAddress)
+
+		// Get provider for gas price
+		const providerService = getProviderService()
+		const provider = providerService.getProvider()
+		const feeData = await provider.getFeeData()
+		const baseGasPrice = feeData.gasPrice || ethers.parseUnits('1', 'gwei')
+		const maxFeePerGas = (baseGasPrice * 12n) / 10n
+		const maxPriorityFeePerGas = ethers.parseUnits('1', 'gwei')
+
+		// Build UserOp
+		const userOp: UserOperation = {
+			sender: walletAddress,
+			nonce: ethers.toBeHex(walletNonce),
+			factory: needsDeployment ? env.NEXUS_ACCOUNT_FACTORY_ADDRESS : undefined,
+			factoryData: needsDeployment
+				? encodeNexusAccountCreation(ownerEOA) +
+					ethers.zeroPadValue(ethers.toBeHex(BigInt(salt || '0')), 32).slice(2)
+				: undefined,
+			callData,
+			callGasLimit: ethers.toBeHex(2000000), // High enough for shield/unshield
+			verificationGasLimit: ethers.toBeHex(needsDeployment ? 1500000 : 1000000),
+			preVerificationGas: ethers.toBeHex(200000),
+			maxFeePerGas: ethers.toBeHex(maxFeePerGas),
+			maxPriorityFeePerGas: ethers.toBeHex(maxPriorityFeePerGas),
+			paymaster: undefined,
+			paymasterVerificationGasLimit: undefined,
+			paymasterPostOpGasLimit: undefined,
+			paymasterData: undefined,
+			signature: '0x'
+		}
+
+		// Sign with paymaster (gasless)
+		const chainId = env.NETWORK === 'mainnet' ? 56 : 97
+		const paymasterData = await signUserOpForBatch(userOp, chainId)
+		userOp.paymaster = paymasterData.paymaster
+		userOp.paymasterVerificationGasLimit = paymasterData.paymasterVerificationGasLimit
+		userOp.paymasterPostOpGasLimit = paymasterData.paymasterPostOpGasLimit
+		userOp.paymasterData = paymasterData.paymasterData
+
+		const userOpHash = await getUserOpHash(userOp, env.ENTRY_POINT_ADDRESS, chainId)
+
+		const response: WalletBatchVerifyResponse = {
+			isValid: true,
+			userOp,
+			userOpHash,
+			needsDeployment
+		}
+
+		return response
+	} catch (error) {
+		return handleAndReturnErrorResponse(reply, error)
+	}
+}
+
+/**
+ * Function for route `/wallet/batch/settle`
+ * Submit signed UserOp for batch operation to bundler
+ * Handles both shield and unshield operations via configurable options
+ *
+ * @param request
+ * @param reply
+ * @returns
+ */
+export async function walletBatchSettle(request: FastifyRequest, reply: FastifyReply) {
+	try {
+		const body = request.body as WalletBatchSettleRequest
+		const { userOp, simulate = true, pollingTimeout = 45 } = body
+
+		// Validate signature exists
+		if (!userOp.signature || userOp.signature === '0x') {
+			const response: WalletBatchSettleResponse = {
+				success: false,
+				errorReason: 'UserOp signature required'
+			}
+			return response
+		}
+
+		// Simulate UserOp first to catch validation errors early
+		if (simulate) {
+			try {
+				await simulateUserOp(userOp)
+			} catch (error) {
+				const errorMsg = error instanceof Error ? error.message : 'Unknown simulation error'
+				const response: WalletBatchSettleResponse = {
+					success: false,
+					errorReason: `UserOp validation failed: ${errorMsg}`
+				}
+				return response
+			}
+		}
+
+		// Submit to bundler
+		let userOpHash: string
+		try {
+			userOpHash = await submitUserOpToBundler(userOp)
+		} catch (error) {
+			throw new BaseErrors.ERR_BUNDLER_SUBMISSION_FAILED()
+		}
+
+		// Wait for receipt with configurable timeout
+		const pollIntervalMs = 1500
+		const maxPolls = Math.ceil((pollingTimeout * 1000) / pollIntervalMs)
+		let txHash = ''
+
+		for (let i = 0; i < maxPolls; i++) {
+			await new Promise((resolve) => setTimeout(resolve, pollIntervalMs))
+			try {
+				const receipt = await getUserOpReceipt(userOpHash)
+				if (receipt.success) {
+					txHash = receipt.txHash
+					break
+				}
+			} catch {
+				// Continue polling
+			}
+		}
+
+		if (!txHash) {
+			const response: WalletBatchSettleResponse = {
+				success: false,
+				userOpHash,
+				errorReason: 'Transaction confirmation timeout'
+			}
+			return response
+		}
+
+		const response: WalletBatchSettleResponse = {
+			success: true,
+			userOpHash,
+			txHash
+		}
+
+		return response
+	} catch (error) {
+		return handleAndReturnErrorResponse(reply, error)
+	}
+}
+
+/**
+ * Sign UserOp for batch operations (shield/unshield)
+ * Skips the fee validation since batch operations don't go through the relayer
+ */
+async function signUserOpForBatch(
+	userOp: UserOperation,
+	chainId: number
+): Promise<{
+	paymaster: string
+	paymasterVerificationGasLimit: string
+	paymasterPostOpGasLimit: string
+	paymasterData: string
+}> {
+	const validAfter = Math.floor(Date.now() / 1000) - 3600 // Valid from 1 hour ago
+	const validUntil = Math.floor(Date.now() / 1000) + 48 * 60 * 60 // 48 hours from now
+
+	const paymasterVerificationGasLimit = 300000
+	const paymasterPostOpGasLimit = 150000
+
+	// Temporarily set paymaster fields so they're included in the hash
+	const userOpWithPaymaster = {
+		...userOp,
+		paymaster: env.PAYMASTER_ADDRESS,
+		paymasterVerificationGasLimit: ethers.toBeHex(paymasterVerificationGasLimit),
+		paymasterPostOpGasLimit: ethers.toBeHex(paymasterPostOpGasLimit)
+	}
+
+	const hash = getVerifyingPaymasterHashForBatch(userOpWithPaymaster, validUntil, validAfter, chainId)
+	const signer = new Wallet(env.PAYMASTER_SIGNER_KEY)
+	const signature = await signer.signMessage(ethers.getBytes(hash))
+	const abiCoder = ethers.AbiCoder.defaultAbiCoder()
+	const timeEncoding = abiCoder.encode(['uint48', 'uint48'], [validUntil, validAfter])
+	const paymasterData = ethers.concat([timeEncoding, signature])
+
+	return {
+		paymaster: env.PAYMASTER_ADDRESS,
+		paymasterVerificationGasLimit: ethers.toBeHex(paymasterVerificationGasLimit),
+		paymasterPostOpGasLimit: ethers.toBeHex(paymasterPostOpGasLimit),
+		paymasterData
+	}
+}
+
+function getVerifyingPaymasterHashForBatch(
+	userOp: UserOperation,
+	validUntil: number,
+	validAfter: number,
+	chainId: number
+): string {
+	const abiCoder = ethers.AbiCoder.defaultAbiCoder()
+	const initCode =
+		userOp.factory && userOp.factoryData
+			? ethers.concat([userOp.factory, userOp.factoryData])
+			: '0x'
+
+	const accountGasLimits = ethers.solidityPacked(
+		['uint128', 'uint128'],
+		[BigInt(userOp.verificationGasLimit), BigInt(userOp.callGasLimit)]
+	)
+
+	const gasFees = ethers.solidityPacked(
+		['uint128', 'uint128'],
+		[BigInt(userOp.maxPriorityFeePerGas), BigInt(userOp.maxFeePerGas)]
+	)
+
+	const paymasterGasLimitsPacked = ethers.solidityPacked(
+		['uint128', 'uint128'],
+		[BigInt(userOp.paymasterVerificationGasLimit || 0), BigInt(userOp.paymasterPostOpGasLimit || 0)]
+	)
+
+	const paymasterValidationGasLimit = BigInt(paymasterGasLimitsPacked)
+
+	return ethers.keccak256(
+		abiCoder.encode(
+			[
+				'address', // sender
+				'uint256', // nonce
+				'bytes32', // keccak256(initCode)
+				'bytes32', // keccak256(callData)
+				'bytes32', // accountGasLimits
+				'uint256', // paymasterValidationGasLimit (uint256 cast from bytes32)
+				'uint256', // preVerificationGas
+				'bytes32', // gasFees
+				'uint256', // chainid
+				'address', // paymaster address
+				'uint256', // validUntil
+				'uint256' // validAfter
+			],
+			[
+				userOp.sender,
+				userOp.nonce,
+				ethers.keccak256(initCode),
+				ethers.keccak256(userOp.callData),
+				accountGasLimits,
+				paymasterValidationGasLimit,
+				userOp.preVerificationGas,
+				gasFees,
+				chainId,
+				env.PAYMASTER_ADDRESS,
+				validUntil,
+				validAfter
+			]
+		)
+	)
+}
+
