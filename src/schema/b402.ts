@@ -851,10 +851,7 @@ export interface GetMasterWalletAddressResponse {
 	salt: string
 }
 
-// ============================================
-// Wallet Batch Schemas (Generic batch UserOp execution)
-// ============================================
-
+// Wallet Incognito Schemas
 export const WalletCallSchema = {
 	type: 'object',
 	properties: {
@@ -866,19 +863,19 @@ export const WalletCallSchema = {
 	additionalProperties: false
 } as const
 
-export const WalletBatchVerifyRequestSchema = {
+export const WalletIncognitoVerifyRequestSchema = {
 	type: 'object',
 	properties: {
 		ownerEOA: { type: 'string' },
 		walletAddress: { type: 'string' },
 		salt: { type: 'string' },
-		calls: { type: 'array', items: WalletCallSchema }
+		calls: { type: 'array', items: WalletCallSchema, maxItems: 3 }
 	},
 	required: ['ownerEOA', 'walletAddress', 'calls'],
 	additionalProperties: false
 } as const
 
-export const WalletBatchVerifyResponseSchema = {
+export const WalletIncognitoVerifyResponseSchema = {
 	type: 'object',
 	properties: {
 		isValid: { type: 'boolean' },
@@ -891,18 +888,16 @@ export const WalletBatchVerifyResponseSchema = {
 	additionalProperties: false
 } as const
 
-export const WalletBatchSettleRequestSchema = {
+export const WalletIncognitoSettleRequestSchema = {
 	type: 'object',
 	properties: {
-		userOp: { type: 'object', additionalProperties: true },
-		simulate: { type: 'boolean' },
-		pollingTimeout: { type: 'number' }
+		userOp: { type: 'object', additionalProperties: true }
 	},
 	required: ['userOp'],
 	additionalProperties: false
 } as const
 
-export const WalletBatchSettleResponseSchema = {
+export const WalletIncognitoSettleResponseSchema = {
 	type: 'object',
 	properties: {
 		success: { type: 'boolean' },
@@ -914,24 +909,21 @@ export const WalletBatchSettleResponseSchema = {
 	additionalProperties: false
 } as const
 
-// ============================================
-// Wallet Batch TypeScript Interfaces
-// ============================================
-
+// Wallet Incognito Interfaces
 export interface WalletCall {
 	to: string
 	value: string
 	data: string
 }
 
-export interface WalletBatchVerifyRequest {
+export interface WalletIncognitoVerifyRequest {
 	ownerEOA: string
 	walletAddress: string
 	salt?: string
 	calls: WalletCall[]
 }
 
-export interface WalletBatchVerifyResponse {
+export interface WalletIncognitoVerifyResponse {
 	isValid: boolean
 	userOp?: UserOperation
 	userOpHash?: string
@@ -939,13 +931,11 @@ export interface WalletBatchVerifyResponse {
 	invalidReason?: string
 }
 
-export interface WalletBatchSettleRequest {
+export interface WalletIncognitoSettleRequest {
 	userOp: UserOperation
-	simulate?: boolean
-	pollingTimeout?: number
 }
 
-export interface WalletBatchSettleResponse {
+export interface WalletIncognitoSettleResponse {
 	success: boolean
 	userOpHash?: string
 	txHash?: string

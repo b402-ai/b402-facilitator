@@ -21,10 +21,10 @@ import type {
 	VerifyResponse,
 	VerifyWalletRequest,
 	VerifyWalletResponse,
-	WalletBatchVerifyRequest,
-	WalletBatchVerifyResponse,
-	WalletBatchSettleRequest,
-	WalletBatchSettleResponse
+	WalletIncognitoSettleRequest,
+	WalletIncognitoSettleResponse,
+	WalletIncognitoVerifyRequest,
+	WalletIncognitoVerifyResponse
 } from '../../schema/b402'
 import { env } from '../../schema/env'
 import { BaseErrors, handleAndReturnErrorResponse } from '../../schema/errors'
@@ -37,7 +37,6 @@ import {
 	decodeExecuteBatch,
 	encodeExecuteBatch,
 	getUserOpReceipt,
-	simulateUserOp,
 	submitUserOpToBundler,
 	validateFeeIncluded
 } from '../../utils/userOp'
@@ -1989,17 +1988,17 @@ export async function health(request: FastifyRequest, reply: FastifyReply) {
 }
 
 /**
- * Function for route `/wallet/batch/verify`
- * Build UserOp for batch operations (approve + shield, or just unshield)
+ * Function for route `/wallet/incognito/verify`
+ * Build UserOp for incognito operations (approve + shield, or unshield)
  * Generic handler that accepts any calls[] array
  *
  * @param request
  * @param reply
  * @returns
  */
-export async function walletBatchVerify(request: FastifyRequest, reply: FastifyReply) {
+export async function walletIncognitoVerify(request: FastifyRequest, reply: FastifyReply) {
 	try {
-		const body = request.body as WalletBatchVerifyRequest
+		const body = request.body as WalletIncognitoVerifyRequest
 		const { ownerEOA, walletAddress, salt, calls } = body
 
 		// Validate addresses
@@ -2012,7 +2011,7 @@ export async function walletBatchVerify(request: FastifyRequest, reply: FastifyR
 
 		// Validate calls array
 		if (!calls || calls.length === 0) {
-			const response: WalletBatchVerifyResponse = {
+			const response: WalletIncognitoVerifyResponse = {
 				isValid: false,
 				invalidReason: 'No calls provided'
 			}
@@ -2062,9 +2061,9 @@ export async function walletBatchVerify(request: FastifyRequest, reply: FastifyR
 			signature: '0x'
 		}
 
-		// Sign with paymaster (gasless)
+		// Sign with paymaster (gasless) - skip fee validation for incognito ops
 		const chainId = env.NETWORK === 'mainnet' ? 56 : 97
-		const paymasterData = await signUserOpForBatch(userOp, chainId)
+		const paymasterData = await signUserOp(userOp, chainId, { skipValidation: true })
 		userOp.paymaster = paymasterData.paymaster
 		userOp.paymasterVerificationGasLimit = paymasterData.paymasterVerificationGasLimit
 		userOp.paymasterPostOpGasLimit = paymasterData.paymasterPostOpGasLimit
@@ -2072,7 +2071,7 @@ export async function walletBatchVerify(request: FastifyRequest, reply: FastifyR
 
 		const userOpHash = await getUserOpHash(userOp, env.ENTRY_POINT_ADDRESS, chainId)
 
-		const response: WalletBatchVerifyResponse = {
+		const response: WalletIncognitoVerifyResponse = {
 			isValid: true,
 			userOp,
 			userOpHash,
@@ -2086,40 +2085,25 @@ export async function walletBatchVerify(request: FastifyRequest, reply: FastifyR
 }
 
 /**
- * Function for route `/wallet/batch/settle`
- * Submit signed UserOp for batch operation to bundler
- * Handles both shield and unshield operations via configurable options
+ * Function for route `/wallet/incognito/settle`
+ * Submit signed UserOp for incognito operation to bundler
  *
  * @param request
  * @param reply
  * @returns
  */
-export async function walletBatchSettle(request: FastifyRequest, reply: FastifyReply) {
+export async function walletIncognitoSettle(request: FastifyRequest, reply: FastifyReply) {
 	try {
-		const body = request.body as WalletBatchSettleRequest
-		const { userOp, simulate = true, pollingTimeout = 45 } = body
+		const body = request.body as WalletIncognitoSettleRequest
+		const { userOp } = body
 
 		// Validate signature exists
 		if (!userOp.signature || userOp.signature === '0x') {
-			const response: WalletBatchSettleResponse = {
+			const response: WalletIncognitoSettleResponse = {
 				success: false,
 				errorReason: 'UserOp signature required'
 			}
 			return response
-		}
-
-		// Simulate UserOp first to catch validation errors early
-		if (simulate) {
-			try {
-				await simulateUserOp(userOp)
-			} catch (error) {
-				const errorMsg = error instanceof Error ? error.message : 'Unknown simulation error'
-				const response: WalletBatchSettleResponse = {
-					success: false,
-					errorReason: `UserOp validation failed: ${errorMsg}`
-				}
-				return response
-			}
 		}
 
 		// Submit to bundler
@@ -2130,9 +2114,9 @@ export async function walletBatchSettle(request: FastifyRequest, reply: FastifyR
 			throw new BaseErrors.ERR_BUNDLER_SUBMISSION_FAILED()
 		}
 
-		// Wait for receipt with configurable timeout
+		// Wait for receipt
 		const pollIntervalMs = 1500
-		const maxPolls = Math.ceil((pollingTimeout * 1000) / pollIntervalMs)
+		const maxPolls = 30
 		let txHash = ''
 
 		for (let i = 0; i < maxPolls; i++) {
@@ -2149,7 +2133,7 @@ export async function walletBatchSettle(request: FastifyRequest, reply: FastifyR
 		}
 
 		if (!txHash) {
-			const response: WalletBatchSettleResponse = {
+			const response: WalletIncognitoSettleResponse = {
 				success: false,
 				userOpHash,
 				errorReason: 'Transaction confirmation timeout'
@@ -2157,7 +2141,7 @@ export async function walletBatchSettle(request: FastifyRequest, reply: FastifyR
 			return response
 		}
 
-		const response: WalletBatchSettleResponse = {
+		const response: WalletIncognitoSettleResponse = {
 			success: true,
 			userOpHash,
 			txHash
@@ -2168,109 +2152,3 @@ export async function walletBatchSettle(request: FastifyRequest, reply: FastifyR
 		return handleAndReturnErrorResponse(reply, error)
 	}
 }
-
-/**
- * Sign UserOp for batch operations (shield/unshield)
- * Skips the fee validation since batch operations don't go through the relayer
- */
-async function signUserOpForBatch(
-	userOp: UserOperation,
-	chainId: number
-): Promise<{
-	paymaster: string
-	paymasterVerificationGasLimit: string
-	paymasterPostOpGasLimit: string
-	paymasterData: string
-}> {
-	const validAfter = Math.floor(Date.now() / 1000) - 3600 // Valid from 1 hour ago
-	const validUntil = Math.floor(Date.now() / 1000) + 48 * 60 * 60 // 48 hours from now
-
-	const paymasterVerificationGasLimit = 300000
-	const paymasterPostOpGasLimit = 150000
-
-	// Temporarily set paymaster fields so they're included in the hash
-	const userOpWithPaymaster = {
-		...userOp,
-		paymaster: env.PAYMASTER_ADDRESS,
-		paymasterVerificationGasLimit: ethers.toBeHex(paymasterVerificationGasLimit),
-		paymasterPostOpGasLimit: ethers.toBeHex(paymasterPostOpGasLimit)
-	}
-
-	const hash = getVerifyingPaymasterHashForBatch(userOpWithPaymaster, validUntil, validAfter, chainId)
-	const signer = new Wallet(env.PAYMASTER_SIGNER_KEY)
-	const signature = await signer.signMessage(ethers.getBytes(hash))
-	const abiCoder = ethers.AbiCoder.defaultAbiCoder()
-	const timeEncoding = abiCoder.encode(['uint48', 'uint48'], [validUntil, validAfter])
-	const paymasterData = ethers.concat([timeEncoding, signature])
-
-	return {
-		paymaster: env.PAYMASTER_ADDRESS,
-		paymasterVerificationGasLimit: ethers.toBeHex(paymasterVerificationGasLimit),
-		paymasterPostOpGasLimit: ethers.toBeHex(paymasterPostOpGasLimit),
-		paymasterData
-	}
-}
-
-function getVerifyingPaymasterHashForBatch(
-	userOp: UserOperation,
-	validUntil: number,
-	validAfter: number,
-	chainId: number
-): string {
-	const abiCoder = ethers.AbiCoder.defaultAbiCoder()
-	const initCode =
-		userOp.factory && userOp.factoryData
-			? ethers.concat([userOp.factory, userOp.factoryData])
-			: '0x'
-
-	const accountGasLimits = ethers.solidityPacked(
-		['uint128', 'uint128'],
-		[BigInt(userOp.verificationGasLimit), BigInt(userOp.callGasLimit)]
-	)
-
-	const gasFees = ethers.solidityPacked(
-		['uint128', 'uint128'],
-		[BigInt(userOp.maxPriorityFeePerGas), BigInt(userOp.maxFeePerGas)]
-	)
-
-	const paymasterGasLimitsPacked = ethers.solidityPacked(
-		['uint128', 'uint128'],
-		[BigInt(userOp.paymasterVerificationGasLimit || 0), BigInt(userOp.paymasterPostOpGasLimit || 0)]
-	)
-
-	const paymasterValidationGasLimit = BigInt(paymasterGasLimitsPacked)
-
-	return ethers.keccak256(
-		abiCoder.encode(
-			[
-				'address', // sender
-				'uint256', // nonce
-				'bytes32', // keccak256(initCode)
-				'bytes32', // keccak256(callData)
-				'bytes32', // accountGasLimits
-				'uint256', // paymasterValidationGasLimit (uint256 cast from bytes32)
-				'uint256', // preVerificationGas
-				'bytes32', // gasFees
-				'uint256', // chainid
-				'address', // paymaster address
-				'uint256', // validUntil
-				'uint256' // validAfter
-			],
-			[
-				userOp.sender,
-				userOp.nonce,
-				ethers.keccak256(initCode),
-				ethers.keccak256(userOp.callData),
-				accountGasLimits,
-				paymasterValidationGasLimit,
-				userOp.preVerificationGas,
-				gasFees,
-				chainId,
-				env.PAYMASTER_ADDRESS,
-				validUntil,
-				validAfter
-			]
-		)
-	)
-}
-

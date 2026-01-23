@@ -20,10 +20,10 @@ import {
 	VerifyResponseSchema,
 	VerifyWalletPaymentRequestSchema,
 	VerifyWalletPaymentResponseSchema,
-	WalletBatchVerifyRequestSchema,
-	WalletBatchVerifyResponseSchema,
-	WalletBatchSettleRequestSchema,
-	WalletBatchSettleResponseSchema
+	WalletIncognitoSettleRequestSchema,
+	WalletIncognitoSettleResponseSchema,
+	WalletIncognitoVerifyRequestSchema,
+	WalletIncognitoVerifyResponseSchema
 } from '../../schema/b402'
 import {
 	claimWalletDeployment,
@@ -38,8 +38,8 @@ import {
 	verifyDeploymentByEOA,
 	verifyDeploymentBySmartWallet,
 	verifyWalletPayment,
-	walletBatchVerify,
-	walletBatchSettle
+	walletIncognitoSettle,
+	walletIncognitoVerify
 } from './b402Controller'
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -203,32 +203,32 @@ export const register = (server: FastifyInstance, _: any, next: any) => {
 		health
 	)
 
-	// Wallet Batch Operations (approve+shield, etc.)
+	// Wallet Incognito Operations (gasless shield/unshield via UserOp)
 
 	server.post(
-		'/wallet/batch/verify',
+		'/wallet/incognito/verify',
 		{
 			schema: {
-				body: WalletBatchVerifyRequestSchema,
+				body: WalletIncognitoVerifyRequestSchema,
 				response: {
-					200: WalletBatchVerifyResponseSchema
+					200: WalletIncognitoVerifyResponseSchema
 				}
 			}
 		},
-		walletBatchVerify
+		walletIncognitoVerify
 	)
 
 	server.post(
-		'/wallet/batch/settle',
+		'/wallet/incognito/settle',
 		{
 			schema: {
-				body: WalletBatchSettleRequestSchema,
+				body: WalletIncognitoSettleRequestSchema,
 				response: {
-					200: WalletBatchSettleResponseSchema
+					200: WalletIncognitoSettleResponseSchema
 				}
 			}
 		},
-		walletBatchSettle
+		walletIncognitoSettle
 	)
 
 	next()
