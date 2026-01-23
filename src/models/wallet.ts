@@ -9,7 +9,7 @@ export interface IWalletDeployment {
 	deploymentTxHash?: string
 	paymentCompleted: boolean
 	deploymentCompleted: boolean
-	feePaymentToken: string // Token used to pay deployment fees
+	feePaymentToken?: string // Token used to pay deployment fees
 	fundingToken?: string // Token used to fund this wallet (optional, only if funded)
 	fundingAmount?: string
 	fundingRequested: boolean
@@ -82,7 +82,7 @@ const WalletDeploymentSchema = new mongoose.Schema<IWalletDeployment>(
 		},
 		feePaymentToken: {
 			type: String,
-			required: true,
+			required: false,
 			trim: true,
 			lowercase: true
 		},
