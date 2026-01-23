@@ -49,9 +49,10 @@ export const PaymentRequirementsSchema = {
 					minItems: 1,
 					maxItems: 10
 				},
-				fundingRequested: { type: 'boolean' }
+				fundingRequested: { type: 'boolean' },
+				token: { type: 'string' }
 			},
-			required: ['ownerAddress', 'salts'],
+			required: ['ownerAddress', 'salts', 'token'],
 			additionalProperties: false
 		}
 	},
@@ -411,6 +412,8 @@ export const GetWalletsByOwnerResponseSchema = {
 					deploymentTxHash: { type: 'string' },
 					paymentCompleted: { type: 'boolean' },
 					deploymentCompleted: { type: 'boolean' },
+					feePaymentToken: { type: 'string' },
+					fundingToken: { type: 'string' },
 					fundingRequested: { type: 'boolean' },
 					fundingCompleted: { type: 'boolean' },
 					fundingAmount: { type: 'string' },
@@ -426,6 +429,8 @@ export const GetWalletsByOwnerResponseSchema = {
 					'paymentTxHash',
 					'paymentCompleted',
 					'deploymentCompleted',
+					'fundingRequested',
+					'fundingCompleted',
 					'createdAt',
 					'updatedAt'
 				],
@@ -445,6 +450,8 @@ export const GetWalletsByOwnerResponseSchema = {
 					deploymentTxHash: { type: 'string' },
 					paymentCompleted: { type: 'boolean' },
 					deploymentCompleted: { type: 'boolean' },
+					feePaymentToken: { type: 'string' },
+					fundingToken: { type: 'string' },
 					fundingRequested: { type: 'boolean' },
 					fundingCompleted: { type: 'boolean' },
 					fundingAmount: { type: 'string' },
@@ -460,6 +467,8 @@ export const GetWalletsByOwnerResponseSchema = {
 					'paymentTxHash',
 					'paymentCompleted',
 					'deploymentCompleted',
+					'fundingRequested',
+					'fundingCompleted',
 					'createdAt',
 					'updatedAt'
 				],
@@ -740,6 +749,7 @@ export interface PaymentRequirements {
 		ownerAddress: string
 		salts: string[]
 		fundingRequested?: boolean
+		token: string
 	}
 }
 
@@ -886,6 +896,12 @@ export interface WalletDeploymentRecord {
 	deploymentTxHash?: string
 	paymentCompleted: boolean
 	deploymentCompleted: boolean
+	feePaymentToken?: string
+	fundingToken?: string
+	fundingRequested: boolean
+	fundingCompleted: boolean
+	fundingAmount?: string
+	fundingTxHash?: string
 	createdAt: string
 	updatedAt: string
 }
@@ -911,4 +927,95 @@ export interface GetMasterWalletAddressResponse {
 	ownerAddress: string
 	masterWalletAddress: string
 	salt: string
+}
+
+// Wallet Incognito Schemas
+export const WalletCallSchema = {
+	type: 'object',
+	properties: {
+		to: { type: 'string' },
+		value: { type: 'string' },
+		data: { type: 'string' }
+	},
+	required: ['to', 'value', 'data'],
+	additionalProperties: false
+} as const
+
+export const WalletIncognitoVerifyRequestSchema = {
+	type: 'object',
+	properties: {
+		ownerEOA: { type: 'string' },
+		walletAddress: { type: 'string' },
+		salt: { type: 'string' },
+		calls: { type: 'array', items: WalletCallSchema, maxItems: 3 }
+	},
+	required: ['ownerEOA', 'walletAddress', 'calls'],
+	additionalProperties: false
+} as const
+
+export const WalletIncognitoVerifyResponseSchema = {
+	type: 'object',
+	properties: {
+		isValid: { type: 'boolean' },
+		userOp: { type: 'object', additionalProperties: true },
+		userOpHash: { type: 'string' },
+		needsDeployment: { type: 'boolean' },
+		invalidReason: { type: 'string' }
+	},
+	required: ['isValid'],
+	additionalProperties: false
+} as const
+
+export const WalletIncognitoSettleRequestSchema = {
+	type: 'object',
+	properties: {
+		userOp: { type: 'object', additionalProperties: true }
+	},
+	required: ['userOp'],
+	additionalProperties: false
+} as const
+
+export const WalletIncognitoSettleResponseSchema = {
+	type: 'object',
+	properties: {
+		success: { type: 'boolean' },
+		userOpHash: { type: 'string' },
+		txHash: { type: 'string' },
+		errorReason: { type: 'string' }
+	},
+	required: ['success'],
+	additionalProperties: false
+} as const
+
+// Wallet Incognito Interfaces
+export interface WalletCall {
+	to: string
+	value: string
+	data: string
+}
+
+export interface WalletIncognitoVerifyRequest {
+	ownerEOA: string
+	walletAddress: string
+	salt?: string
+	calls: WalletCall[]
+}
+
+export interface WalletIncognitoVerifyResponse {
+	isValid: boolean
+	userOp?: UserOperation
+	userOpHash?: string
+	needsDeployment?: boolean
+	invalidReason?: string
+}
+
+export interface WalletIncognitoSettleRequest {
+	userOp: UserOperation
+}
+
+export interface WalletIncognitoSettleResponse {
+	success: boolean
+	userOpHash?: string
+	txHash?: string
+	errorReason?: string
 }

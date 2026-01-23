@@ -20,7 +20,11 @@ import type {
 	VerifyRequest,
 	VerifyResponse,
 	VerifyWalletRequest,
-	VerifyWalletResponse
+	VerifyWalletResponse,
+	WalletIncognitoSettleRequest,
+	WalletIncognitoSettleResponse,
+	WalletIncognitoVerifyRequest,
+	WalletIncognitoVerifyResponse
 } from '../../schema/b402'
 import { env } from '../../schema/env'
 import { BaseErrors, handleAndReturnErrorResponse } from '../../schema/errors'
@@ -760,6 +764,8 @@ export async function settleDeploymentByEOA(request: FastifyRequest, reply: Fast
 						paymentTxHash: '', // Will be set after payment confirmation
 						paymentCompleted: false, // Will be set to true after payment confirmation
 						deploymentCompleted: false,
+						feePaymentToken: feePayment.token.toLowerCase(),
+						fundingToken: fundingPayment?.token.toLowerCase(),
 						fundingAmount: wallet.fundingAmount,
 						fundingRequested: !!wallet.fundingAmount,
 						fundingCompleted: false,
@@ -1075,9 +1081,14 @@ export async function verifyDeploymentBySmartWallet(request: FastifyRequest, rep
 		const wallets: Array<{ address: string; salt: string; owner: string; fundingAmount?: string }> =
 			[]
 
-		// Determine which token to use - default to first supported token (USDT)
-		const token = Object.values(SUPPORTED_TOKENS)[0].address
-		const tokenConfig = Object.values(SUPPORTED_TOKENS)[0]
+		// Get token from request and validate
+		const token = paymentRequirements.deployment.token
+		const tokenConfig = Object.values(SUPPORTED_TOKENS).find(
+			(t) => t.address.toLowerCase() === token.toLowerCase()
+		)
+		if (!tokenConfig) {
+			throw new BaseErrors.ERR_UNSUPPORTED_TOKEN()
+		}
 
 		const fundingAmounts: string[] = []
 		for (let i = 0; i < count; i++) {
@@ -1349,6 +1360,8 @@ export async function settleDeploymentBySmartWallet(request: FastifyRequest, rep
 					paymentTxHash: '', // Will be set after confirmation
 					paymentCompleted: false, // Will be set to true after confirmation
 					deploymentCompleted: false,
+					feePaymentToken: token.toLowerCase(),
+					fundingToken: wallet.fundingAmount ? token.toLowerCase() : undefined,
 					fundingAmount: wallet.fundingAmount,
 					fundingRequested: !!wallet.fundingAmount,
 					fundingCompleted: false,
@@ -1569,6 +1582,8 @@ export async function getWalletsByOwner(request: FastifyRequest, reply: FastifyR
 			deploymentTxHash?: string
 			paymentCompleted: boolean
 			deploymentCompleted: boolean
+			feePaymentToken?: string
+			fundingToken?: string
 			fundingRequested: boolean
 			fundingCompleted: boolean
 			fundingAmount?: string
@@ -1592,6 +1607,8 @@ export async function getWalletsByOwner(request: FastifyRequest, reply: FastifyR
 				deploymentTxHash: d.deploymentTxHash,
 				paymentCompleted: d.paymentCompleted,
 				deploymentCompleted: d.deploymentCompleted,
+				feePaymentToken: d.feePaymentToken,
+				fundingToken: d.fundingToken,
 				fundingRequested: d.fundingRequested,
 				fundingCompleted: d.fundingCompleted,
 				fundingAmount: d.fundingAmount,
@@ -1619,6 +1636,8 @@ export async function getWalletsByOwner(request: FastifyRequest, reply: FastifyR
 				deploymentTxHash: undefined,
 				paymentCompleted: false,
 				deploymentCompleted: false,
+				feePaymentToken: undefined,
+				fundingToken: undefined,
 				fundingRequested: false,
 				fundingCompleted: false,
 				fundingAmount: undefined,
@@ -1967,6 +1986,172 @@ export async function health(request: FastifyRequest, reply: FastifyReply) {
 			network,
 			relayer: relayerWallet.address
 		}
+		return response
+	} catch (error) {
+		return handleAndReturnErrorResponse(reply, error)
+	}
+}
+
+/**
+ * Function for route `/wallet/incognito/verify`
+ * Build UserOp for incognito operations (approve + shield, or unshield)
+ * Generic handler that accepts any calls[] array
+ *
+ * @param request
+ * @param reply
+ * @returns
+ */
+export async function walletIncognitoVerify(request: FastifyRequest, reply: FastifyReply) {
+	try {
+		const body = request.body as WalletIncognitoVerifyRequest
+		const { ownerEOA, walletAddress, salt, calls } = body
+
+		// Validate addresses
+		if (!ethers.isAddress(ownerEOA)) {
+			throw new BaseErrors.ERR_INVALID_ADDRESS()
+		}
+		if (!ethers.isAddress(walletAddress)) {
+			throw new BaseErrors.ERR_INVALID_ADDRESS()
+		}
+
+		// Validate calls array
+		if (!calls || calls.length === 0) {
+			const response: WalletIncognitoVerifyResponse = {
+				isValid: false,
+				invalidReason: 'No calls provided'
+			}
+			return response
+		}
+
+		// Check if smart wallet is already deployed
+		const needsDeployment = !(await isWalletDeployed(walletAddress))
+
+		// Build batch calls for the UserOp
+		const batchCalls: BatchCall[] = calls.map((call) => ({
+			to: call.to,
+			value: call.value,
+			data: call.data
+		}))
+
+		const callData = encodeExecuteBatch(batchCalls)
+		const walletNonce = needsDeployment ? 0 : await getWalletNonce(walletAddress)
+
+		// Get provider for gas price
+		const providerService = getProviderService()
+		const provider = providerService.getProvider()
+		const feeData = await provider.getFeeData()
+		const baseGasPrice = feeData.gasPrice || ethers.parseUnits('1', 'gwei')
+		const maxFeePerGas = (baseGasPrice * 12n) / 10n
+		const maxPriorityFeePerGas = ethers.parseUnits('1', 'gwei')
+
+		// Build UserOp
+		const userOp: UserOperation = {
+			sender: walletAddress,
+			nonce: ethers.toBeHex(walletNonce),
+			factory: needsDeployment ? env.NEXUS_ACCOUNT_FACTORY_ADDRESS : undefined,
+			factoryData: needsDeployment
+				? encodeNexusAccountCreation(ownerEOA) +
+					ethers.zeroPadValue(ethers.toBeHex(BigInt(salt || '0')), 32).slice(2)
+				: undefined,
+			callData,
+			callGasLimit: ethers.toBeHex(2000000), // High enough for shield/unshield
+			verificationGasLimit: ethers.toBeHex(needsDeployment ? 1500000 : 1000000),
+			preVerificationGas: ethers.toBeHex(200000),
+			maxFeePerGas: ethers.toBeHex(maxFeePerGas),
+			maxPriorityFeePerGas: ethers.toBeHex(maxPriorityFeePerGas),
+			paymaster: undefined,
+			paymasterVerificationGasLimit: undefined,
+			paymasterPostOpGasLimit: undefined,
+			paymasterData: undefined,
+			signature: '0x'
+		}
+
+		// Sign with paymaster (gasless) - skip fee validation for incognito ops
+		const chainId = env.NETWORK === 'mainnet' ? 56 : 97
+		const paymasterData = await signUserOp(userOp, chainId, { skipValidation: true })
+		userOp.paymaster = paymasterData.paymaster
+		userOp.paymasterVerificationGasLimit = paymasterData.paymasterVerificationGasLimit
+		userOp.paymasterPostOpGasLimit = paymasterData.paymasterPostOpGasLimit
+		userOp.paymasterData = paymasterData.paymasterData
+
+		const userOpHash = await getUserOpHash(userOp, env.ENTRY_POINT_ADDRESS, chainId)
+
+		const response: WalletIncognitoVerifyResponse = {
+			isValid: true,
+			userOp,
+			userOpHash,
+			needsDeployment
+		}
+
+		return response
+	} catch (error) {
+		return handleAndReturnErrorResponse(reply, error)
+	}
+}
+
+/**
+ * Function for route `/wallet/incognito/settle`
+ * Submit signed UserOp for incognito operation to bundler
+ *
+ * @param request
+ * @param reply
+ * @returns
+ */
+export async function walletIncognitoSettle(request: FastifyRequest, reply: FastifyReply) {
+	try {
+		const body = request.body as WalletIncognitoSettleRequest
+		const { userOp } = body
+
+		// Validate signature exists
+		if (!userOp.signature || userOp.signature === '0x') {
+			const response: WalletIncognitoSettleResponse = {
+				success: false,
+				errorReason: 'UserOp signature required'
+			}
+			return response
+		}
+
+		// Submit to bundler
+		let userOpHash: string
+		try {
+			userOpHash = await submitUserOpToBundler(userOp)
+		} catch (error) {
+			throw new BaseErrors.ERR_BUNDLER_SUBMISSION_FAILED()
+		}
+
+		// Wait for receipt
+		const pollIntervalMs = 1500
+		const maxPolls = 30
+		let txHash = ''
+
+		for (let i = 0; i < maxPolls; i++) {
+			await new Promise((resolve) => setTimeout(resolve, pollIntervalMs))
+			try {
+				const receipt = await getUserOpReceipt(userOpHash)
+				if (receipt.success) {
+					txHash = receipt.txHash
+					break
+				}
+			} catch {
+				// Continue polling
+			}
+		}
+
+		if (!txHash) {
+			const response: WalletIncognitoSettleResponse = {
+				success: false,
+				userOpHash,
+				errorReason: 'Transaction confirmation timeout'
+			}
+			return response
+		}
+
+		const response: WalletIncognitoSettleResponse = {
+			success: true,
+			userOpHash,
+			txHash
+		}
+
 		return response
 	} catch (error) {
 		return handleAndReturnErrorResponse(reply, error)
