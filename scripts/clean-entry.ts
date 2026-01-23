@@ -496,21 +496,14 @@ async function cleanEntry(config: CleanEntryConfig) {
 
 	console.log('\nQueuing unshield transaction with backend...')
 
-	const nullifiers = [publicInputs.nullifiers[0].toString(16).padStart(64, '0')].map(
-		(n) => `0x${n}`
-	)
+	const nullifierHash = `0x${publicInputs.nullifiers[0].toString(16).padStart(64, '0')}`
 
 	const queueRequest = {
 		txidVersion: TXIDVersion.V2_PoseidonMerkle,
 		transactionTo: config.railgunSmartWalletAddress,
 		transactionData: populateResponse.data,
-		broadcasterAddress: railgunAddress,
-		feesID: 'b402-clean-entry',
 		chain: { type: chain.type, id: chain.id },
-		nullifiers: nullifiers,
-		minGasPrice: gasPrice.toString(),
-		useRelayAdapt: false,
-		poiProofs: {}
+		nullifierHash: nullifierHash
 	}
 
 	const response = await fetch(`${config.apiUrl}/privacy/queue-unshield`, {
