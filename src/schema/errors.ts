@@ -417,6 +417,36 @@ const errorCodesConfig = {
 	ERR_GAS_ESTIMATION_NO_RESULT: {
 		code: 'userp_error' as const,
 		message: 'Gas estimation returned no result'
+	},
+
+	// Swap errors
+	ERR_SWAP_QUOTE_FAILED: {
+		code: 'blockchain_error' as const,
+		message: 'Failed to get swap quote'
+	},
+	ERR_SWAP_EXECUTION_FAILED: {
+		code: 'blockchain_error' as const,
+		message: 'Swap execution failed'
+	},
+	ERR_SWAP_INSUFFICIENT_LIQUIDITY: {
+		code: 'blockchain_error' as const,
+		message: 'Insufficient liquidity for swap'
+	},
+	ERR_SWAP_SLIPPAGE_EXCEEDED: {
+		code: 'blockchain_error' as const,
+		message: 'Swap slippage exceeded maximum allowed'
+	},
+	ERR_SWAP_PAYMENT_FAILED: {
+		code: 'payment_error' as const,
+		message: 'Swap payment verification failed'
+	},
+	ERR_SWAP_MISSING_PARAMS: {
+		code: 'validation_error' as const,
+		message: 'Missing required swap parameters'
+	},
+	ERR_SWAP_INVALID_TOKEN: {
+		code: 'token_error' as const,
+		message: 'Invalid token address for swap'
 	}
 } as const
 

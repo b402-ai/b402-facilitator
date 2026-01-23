@@ -320,24 +320,78 @@ export const ClaimWalletDeploymentResponseSchema = {
 	type: 'object',
 	properties: {
 		success: { type: 'boolean' },
-		wallets: {
-			type: 'array',
-			items: {
-				type: 'object',
-				properties: {
-					address: { type: 'string' },
-					salt: { type: 'string' },
-					owner: { type: 'string' }
+		deployments: {
+			type: 'object',
+			properties: {
+				successful: {
+					type: 'array',
+					items: {
+						type: 'object',
+						properties: {
+							address: { type: 'string' },
+							salt: { type: 'string' },
+							owner: { type: 'string' },
+							deploymentTxHash: { type: 'string' },
+							needsFundingUpdate: { type: 'boolean' }
+						},
+						required: ['address', 'salt', 'owner', 'deploymentTxHash'],
+						additionalProperties: false
+					}
 				},
-				required: ['address', 'salt', 'owner'],
-				additionalProperties: false
-			}
+				failed: {
+					type: 'array',
+					items: {
+						type: 'object',
+						properties: {
+							address: { type: 'string' },
+							salt: { type: 'string' },
+							owner: { type: 'string' },
+							error: { type: 'string' }
+						},
+						required: ['address', 'salt', 'owner', 'error'],
+						additionalProperties: false
+					}
+				}
+			},
+			required: ['successful', 'failed'],
+			additionalProperties: false
 		},
-		deploymentTxHash: { type: 'string' },
-		network: { type: 'string' },
-		errorReason: { type: 'string' }
+		funding: {
+			type: 'object',
+			properties: {
+				successful: {
+					type: 'array',
+					items: {
+						type: 'object',
+						properties: {
+							address: { type: 'string' },
+							fundingTxHash: { type: 'string' },
+							fundingAmount: { type: 'string' }
+						},
+						required: ['address', 'fundingTxHash', 'fundingAmount'],
+						additionalProperties: false
+					}
+				},
+				failed: {
+					type: 'array',
+					items: {
+						type: 'object',
+						properties: {
+							address: { type: 'string' },
+							reason: { type: 'string' },
+							fundingAmount: { type: 'string' }
+						},
+						required: ['address', 'reason'],
+						additionalProperties: false
+					}
+				}
+			},
+			required: ['successful', 'failed'],
+			additionalProperties: false
+		},
+		network: { type: 'string' }
 	},
-	required: ['success', 'wallets', 'deploymentTxHash', 'network'],
+	required: ['success', 'deployments', 'funding', 'network'],
 	additionalProperties: false
 } as const
 
@@ -803,10 +857,34 @@ export interface ClaimWalletDeploymentRequest {
 
 export interface ClaimWalletDeploymentResponse {
 	success: boolean
-	wallets: DeployedWallet[]
-	deploymentTxHash: string
+	deployments: {
+		successful: Array<{
+			address: string
+			salt: string
+			owner: string
+			deploymentTxHash: string
+			needsFundingUpdate?: boolean
+		}>
+		failed: Array<{
+			address: string
+			salt: string
+			owner: string
+			error: string
+		}>
+	}
+	funding: {
+		successful: Array<{
+			address: string
+			fundingTxHash: string
+			fundingAmount: string
+		}>
+		failed: Array<{
+			address: string
+			reason: string
+			fundingAmount?: string
+		}>
+	}
 	network: string
-	errorReason?: string
 }
 
 export interface WalletDeploymentRecord {

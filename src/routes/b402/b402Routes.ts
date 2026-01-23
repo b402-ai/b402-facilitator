@@ -26,6 +26,21 @@ import {
 	WalletIncognitoVerifyResponseSchema
 } from '../../schema/b402'
 import {
+	SwapGaslessApproveRequestSchema,
+	SwapGaslessApproveResponseSchema,
+	SwapHealthResponseSchema,
+	SwapPaymentIntentRequestSchema,
+	SwapPaymentIntentResponseSchema,
+	SwapQuoteQuerySchema,
+	SwapQuoteResponseSchema,
+	SwapRequestSchema,
+	SwapResponseSchema,
+	SwapWalletSettleRequestSchema,
+	SwapWalletSettleResponseSchema,
+	SwapWalletVerifyRequestSchema,
+	SwapWalletVerifyResponseSchema
+} from '../../schema/swap'
+import {
 	claimWalletDeployment,
 	getMasterWalletAddress,
 	getWalletsByOwner,
@@ -34,6 +49,13 @@ import {
 	settleDeploymentByEOA,
 	settleDeploymentBySmartWallet,
 	settleWalletPayment,
+	swap,
+	swapGaslessApprove,
+	swapHealth,
+	swapPaymentIntent,
+	swapQuote,
+	swapWalletSettle,
+	swapWalletVerify,
 	verify,
 	verifyDeploymentByEOA,
 	verifyDeploymentBySmartWallet,
@@ -229,6 +251,83 @@ export const register = (server: FastifyInstance, _: any, next: any) => {
 			}
 		},
 		walletIncognitoSettle
+	)
+
+	// Swap routes
+	server.get(
+		'/swap/quote',
+		{
+			schema: {
+				querystring: SwapQuoteQuerySchema,
+				response: { 200: SwapQuoteResponseSchema }
+			}
+		},
+		swapQuote
+	)
+
+	server.get(
+		'/swap/health',
+		{
+			schema: {
+				response: { 200: SwapHealthResponseSchema }
+			}
+		},
+		swapHealth
+	)
+
+	server.post(
+		'/swap',
+		{
+			schema: {
+				body: SwapRequestSchema,
+				response: { 200: SwapResponseSchema }
+			}
+		},
+		swap
+	)
+
+	server.post(
+		'/swap/payment-intent',
+		{
+			schema: {
+				body: SwapPaymentIntentRequestSchema,
+				response: { 200: SwapPaymentIntentResponseSchema }
+			}
+		},
+		swapPaymentIntent
+	)
+
+	server.post(
+		'/swap/gasless-approve',
+		{
+			schema: {
+				body: SwapGaslessApproveRequestSchema,
+				response: { 200: SwapGaslessApproveResponseSchema }
+			}
+		},
+		swapGaslessApprove
+	)
+
+	server.post(
+		'/swap/wallet/verify',
+		{
+			schema: {
+				body: SwapWalletVerifyRequestSchema,
+				response: { 200: SwapWalletVerifyResponseSchema }
+			}
+		},
+		swapWalletVerify
+	)
+
+	server.post(
+		'/swap/wallet/settle',
+		{
+			schema: {
+				body: SwapWalletSettleRequestSchema,
+				response: { 200: SwapWalletSettleResponseSchema }
+			}
+		},
+		swapWalletSettle
 	)
 
 	next()
