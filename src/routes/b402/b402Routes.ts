@@ -19,7 +19,11 @@ import {
 	VerifyRequestSchema,
 	VerifyResponseSchema,
 	VerifyWalletPaymentRequestSchema,
-	VerifyWalletPaymentResponseSchema
+	VerifyWalletPaymentResponseSchema,
+	WalletIncognitoSettleRequestSchema,
+	WalletIncognitoSettleResponseSchema,
+	WalletIncognitoVerifyRequestSchema,
+	WalletIncognitoVerifyResponseSchema
 } from '../../schema/b402'
 import {
 	claimWalletDeployment,
@@ -33,7 +37,9 @@ import {
 	verify,
 	verifyDeploymentByEOA,
 	verifyDeploymentBySmartWallet,
-	verifyWalletPayment
+	verifyWalletPayment,
+	walletIncognitoSettle,
+	walletIncognitoVerify
 } from './b402Controller'
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -195,6 +201,34 @@ export const register = (server: FastifyInstance, _: any, next: any) => {
 			}
 		},
 		health
+	)
+
+	// Wallet Incognito Operations (gasless shield/unshield via UserOp)
+
+	server.post(
+		'/wallet/incognito/verify',
+		{
+			schema: {
+				body: WalletIncognitoVerifyRequestSchema,
+				response: {
+					200: WalletIncognitoVerifyResponseSchema
+				}
+			}
+		},
+		walletIncognitoVerify
+	)
+
+	server.post(
+		'/wallet/incognito/settle',
+		{
+			schema: {
+				body: WalletIncognitoSettleRequestSchema,
+				response: {
+					200: WalletIncognitoSettleResponseSchema
+				}
+			}
+		},
+		walletIncognitoSettle
 	)
 
 	next()

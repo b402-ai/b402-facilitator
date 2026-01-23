@@ -129,16 +129,19 @@ export function validateBeforeSigning(userOp: UserOperation): {
 
 export async function signUserOp(
 	userOp: UserOperation,
-	chainId: number
+	chainId: number,
+	options?: { skipValidation?: boolean }
 ): Promise<{
 	paymaster: string
 	paymasterVerificationGasLimit: string
 	paymasterPostOpGasLimit: string
 	paymasterData: string
 }> {
-	const validation = validateBeforeSigning(userOp)
-	if (!validation.valid) {
-		throw new BaseErrors.ERR_PAYMASTER_VALIDATION_FAILED()
+	if (!options?.skipValidation) {
+		const validation = validateBeforeSigning(userOp)
+		if (!validation.valid) {
+			throw new BaseErrors.ERR_PAYMASTER_VALIDATION_FAILED()
+		}
 	}
 
 	const validAfter = Math.floor(Date.now() / 1000) - 3600 // Valid from 1 hour ago

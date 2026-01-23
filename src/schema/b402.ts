@@ -850,3 +850,94 @@ export interface GetMasterWalletAddressResponse {
 	masterWalletAddress: string
 	salt: string
 }
+
+// Wallet Incognito Schemas
+export const WalletCallSchema = {
+	type: 'object',
+	properties: {
+		to: { type: 'string' },
+		value: { type: 'string' },
+		data: { type: 'string' }
+	},
+	required: ['to', 'value', 'data'],
+	additionalProperties: false
+} as const
+
+export const WalletIncognitoVerifyRequestSchema = {
+	type: 'object',
+	properties: {
+		ownerEOA: { type: 'string' },
+		walletAddress: { type: 'string' },
+		salt: { type: 'string' },
+		calls: { type: 'array', items: WalletCallSchema, maxItems: 3 }
+	},
+	required: ['ownerEOA', 'walletAddress', 'calls'],
+	additionalProperties: false
+} as const
+
+export const WalletIncognitoVerifyResponseSchema = {
+	type: 'object',
+	properties: {
+		isValid: { type: 'boolean' },
+		userOp: { type: 'object', additionalProperties: true },
+		userOpHash: { type: 'string' },
+		needsDeployment: { type: 'boolean' },
+		invalidReason: { type: 'string' }
+	},
+	required: ['isValid'],
+	additionalProperties: false
+} as const
+
+export const WalletIncognitoSettleRequestSchema = {
+	type: 'object',
+	properties: {
+		userOp: { type: 'object', additionalProperties: true }
+	},
+	required: ['userOp'],
+	additionalProperties: false
+} as const
+
+export const WalletIncognitoSettleResponseSchema = {
+	type: 'object',
+	properties: {
+		success: { type: 'boolean' },
+		userOpHash: { type: 'string' },
+		txHash: { type: 'string' },
+		errorReason: { type: 'string' }
+	},
+	required: ['success'],
+	additionalProperties: false
+} as const
+
+// Wallet Incognito Interfaces
+export interface WalletCall {
+	to: string
+	value: string
+	data: string
+}
+
+export interface WalletIncognitoVerifyRequest {
+	ownerEOA: string
+	walletAddress: string
+	salt?: string
+	calls: WalletCall[]
+}
+
+export interface WalletIncognitoVerifyResponse {
+	isValid: boolean
+	userOp?: UserOperation
+	userOpHash?: string
+	needsDeployment?: boolean
+	invalidReason?: string
+}
+
+export interface WalletIncognitoSettleRequest {
+	userOp: UserOperation
+}
+
+export interface WalletIncognitoSettleResponse {
+	success: boolean
+	userOpHash?: string
+	txHash?: string
+	errorReason?: string
+}
