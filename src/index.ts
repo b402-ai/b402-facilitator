@@ -44,9 +44,7 @@ async function start() {
 		await server.ready()
 
 		initializeProviderService({
-			NETWORK: server.config.NETWORK,
-			BSC_RPC_URL: server.config.BSC_RPC_URL,
-			BSC_TESTNET_RPC_URL: server.config.BSC_TESTNET_RPC_URL
+			RPC_URL: server.config.RPC_URL
 		})
 
 		server.log.info(`Provider service initialized for network: ${server.config.NETWORK}`)

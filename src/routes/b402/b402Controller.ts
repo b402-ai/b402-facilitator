@@ -1,7 +1,7 @@
 import { Contract, Wallet, ethers } from 'ethers'
 import type { FastifyReply, FastifyRequest } from 'fastify'
 
-import { B402_RELAYER_ABI, SUPPORTED_TOKENS } from '../../constants'
+import { B402_RELAYER_ABI, CHAIN_CONFIG, SUPPORTED_TOKENS } from '../../constants'
 import { WalletDeployment } from '../../models'
 import type {
 	DeployEOASettleRequest,
@@ -297,7 +297,7 @@ export async function verifyWalletPayment(request: FastifyRequest, reply: Fastif
 			throw new BaseErrors.ERR_USEROP_CREATION_FAILED()
 		}
 
-		const chainId = env.NETWORK === 'mainnet' ? 56 : 97
+		const chainId = CHAIN_CONFIG.chainId
 		const paymasterData = await signUserOp(userOp, chainId)
 		userOp.paymaster = paymasterData.paymaster
 		userOp.paymasterVerificationGasLimit = paymasterData.paymasterVerificationGasLimit
@@ -1204,7 +1204,7 @@ export async function verifyDeploymentBySmartWallet(request: FastifyRequest, rep
 		}
 
 		// Sign UserOp with paymaster to enable gasless transaction
-		const chainId = env.NETWORK === 'mainnet' ? 56 : 97
+		const chainId = CHAIN_CONFIG.chainId
 		const paymasterData = await signUserOp(userOp, chainId)
 		userOp.paymaster = paymasterData.paymaster
 		userOp.paymasterVerificationGasLimit = paymasterData.paymasterVerificationGasLimit
@@ -2067,7 +2067,7 @@ export async function walletIncognitoVerify(request: FastifyRequest, reply: Fast
 		}
 
 		// Sign with paymaster (gasless) - skip fee validation for incognito ops
-		const chainId = env.NETWORK === 'mainnet' ? 56 : 97
+		const chainId = CHAIN_CONFIG.chainId
 		const paymasterData = await signUserOp(userOp, chainId, { skipValidation: true })
 		userOp.paymaster = paymasterData.paymaster
 		userOp.paymasterVerificationGasLimit = paymasterData.paymasterVerificationGasLimit

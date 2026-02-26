@@ -1,5 +1,6 @@
 import { type JsonRpcProvider, ethers } from 'ethers'
 
+import { CHAIN_CONFIG } from '../constants'
 import { BaseErrors } from '../schema/errors'
 
 export class ProviderService {
@@ -7,16 +8,13 @@ export class ProviderService {
 	private chainId: number
 	private network: string
 
-	constructor(config: { NETWORK: string; BSC_RPC_URL: string; BSC_TESTNET_RPC_URL: string }) {
-		const envNetwork = config.NETWORK || 'testnet'
-		this.chainId = envNetwork === 'mainnet' ? 56 : 97
-		this.network = envNetwork
+	constructor(config: { RPC_URL: string }) {
+		this.chainId = CHAIN_CONFIG.chainId
+		this.network = CHAIN_CONFIG.name
 
-		const rpcUrl = envNetwork === 'mainnet' ? config.BSC_RPC_URL : config.BSC_TESTNET_RPC_URL
-
-		this.provider = new ethers.JsonRpcProvider(rpcUrl, {
+		this.provider = new ethers.JsonRpcProvider(config.RPC_URL, {
 			chainId: this.chainId,
-			name: envNetwork === 'mainnet' ? 'bsc' : 'bsc-testnet'
+			name: this.network
 		})
 	}
 
@@ -36,11 +34,7 @@ export class ProviderService {
 // Singleton instance
 let providerServiceInstance: ProviderService | null = null
 
-export function initializeProviderService(config: {
-	NETWORK: string
-	BSC_RPC_URL: string
-	BSC_TESTNET_RPC_URL: string
-}): void {
+export function initializeProviderService(config: { RPC_URL: string }): void {
 	if (!providerServiceInstance) {
 		providerServiceInstance = new ProviderService(config)
 	}
