@@ -5,7 +5,8 @@ import type { UserOperation } from '../schema/b402'
 import { env } from '../schema/env'
 import { BaseErrors } from '../schema/errors'
 import type { BatchCall } from '../types/wallet'
-import { getProvider, getTokenAllowance, getWalletNonce, isWalletDeployed } from './wallet'
+import { getProviderService } from './provider'
+import { getTokenAllowance, getWalletNonce, isWalletDeployed } from './wallet'
 
 // ERC-7579 Nexus account ABI
 const NEXUS_ACCOUNT_ABI = [
@@ -183,7 +184,7 @@ export async function createPaymentUserOpOrThrow(params: {
 		}
 	}
 
-	const provider = getProvider()
+	const provider = getProviderService().getProvider()
 
 	// Parse all payment amounts and calculate total
 	const paymentAmounts = amounts.map((amt) => ethers.parseUnits(amt, tokenConfig.decimals))

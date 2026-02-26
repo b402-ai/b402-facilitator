@@ -4,6 +4,7 @@ import { env } from '../schema/env'
 import { BaseErrors } from '../schema/errors'
 import { getMasterWalletCache, setMasterWalletCache } from './masterWalletCache'
 import { encodeNexusAccountCreation } from './nexus'
+import { getProviderService } from './provider'
 
 const NEXUS_ACCOUNT_FACTORY_ABI = [
 	'function computeAccountAddress(bytes calldata initData, bytes32 salt) view returns (address)',
@@ -17,14 +18,8 @@ const ERC20_ABI = [
 	'function symbol() view returns (string)'
 ]
 
-// Singleton instance
-let providerInstance: ethers.JsonRpcProvider | null = null
-
-export function getProvider(): ethers.JsonRpcProvider {
-	if (!providerInstance) {
-		providerInstance = new ethers.JsonRpcProvider(env.RPC_URL)
-	}
-	return providerInstance
+function getProvider(): ethers.JsonRpcProvider {
+	return getProviderService().getProvider() as ethers.JsonRpcProvider
 }
 
 export function getFactoryContract(): ethers.Contract {
