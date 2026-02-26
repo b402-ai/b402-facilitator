@@ -22,8 +22,7 @@ let providerInstance: ethers.JsonRpcProvider | null = null
 
 export function getProvider(): ethers.JsonRpcProvider {
 	if (!providerInstance) {
-		const rpcUrl = env.NETWORK === 'mainnet' ? env.BSC_RPC_URL : env.BSC_TESTNET_RPC_URL
-		providerInstance = new ethers.JsonRpcProvider(rpcUrl)
+		providerInstance = new ethers.JsonRpcProvider(env.RPC_URL)
 	}
 	return providerInstance
 }

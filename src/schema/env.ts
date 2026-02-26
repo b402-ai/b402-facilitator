@@ -6,11 +6,10 @@ interface IEnvSchema {
 	SERVER_PORT: string
 	SERVER_HOST: string
 
-	// Blockchain RPC endpoints
-	BSC_RPC_URL: string
-	BSC_TESTNET_RPC_URL: string
+	// Blockchain RPC endpoint
+	RPC_URL: string
 
-	// Network selection (mainnet or testnet)
+	// Network selection (bsc or base)
 	NETWORK: string
 
 	// Relayer configuration (for EOA payments)
@@ -68,13 +67,9 @@ export const envSchema: JSONSchemaType<IEnvSchema> = {
 		SERVER_PORT: { type: 'string', default: '3402' },
 		SERVER_HOST: { type: 'string', default: '0.0.0.0' },
 
-		BSC_RPC_URL: { type: 'string', default: 'https://bsc-dataseed.binance.org' },
-		BSC_TESTNET_RPC_URL: {
-			type: 'string',
-			default: 'https://data-seed-prebsc-1-s1.binance.org:8545'
-		},
+		RPC_URL: { type: 'string', default: 'https://bsc-dataseed.binance.org' },
 
-		NETWORK: { type: 'string', default: 'testnet' },
+		NETWORK: { type: 'string', default: 'bsc' },
 
 		RELAYER_PRIVATE_KEY: { type: 'string' },
 		B402_RELAYER_ADDRESS: { type: 'string' },
@@ -127,10 +122,8 @@ function getEnv(): IEnvSchema {
 	return {
 		SERVER_PORT: process.env.SERVER_PORT || '3402',
 		SERVER_HOST: process.env.SERVER_HOST || '0.0.0.0',
-		BSC_RPC_URL: process.env.BSC_RPC_URL || 'https://bsc-dataseed.binance.org',
-		BSC_TESTNET_RPC_URL:
-			process.env.BSC_TESTNET_RPC_URL || 'https://data-seed-prebsc-1-s1.binance.org:8545',
-		NETWORK: process.env.NETWORK || 'testnet',
+		RPC_URL: process.env.RPC_URL || 'https://bsc-dataseed.binance.org',
+		NETWORK: process.env.NETWORK || 'bsc',
 		RELAYER_PRIVATE_KEY: process.env.RELAYER_PRIVATE_KEY as string,
 		B402_RELAYER_ADDRESS: process.env.B402_RELAYER_ADDRESS as string,
 		ENTRY_POINT_ADDRESS: process.env.ENTRY_POINT_ADDRESS as string,

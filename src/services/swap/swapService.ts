@@ -11,6 +11,7 @@
  */
 import { Contract, Wallet, ethers } from 'ethers'
 
+import { CHAIN_CONFIG } from '../../constants'
 import { env } from '../../schema/env'
 import { getProviderService } from '../../utils/provider'
 
@@ -475,7 +476,7 @@ class SwapService {
 		const domain = {
 			name: 'B402',
 			version: '1',
-			chainId: env.NETWORK === 'mainnet' ? 56 : 97,
+			chainId: CHAIN_CONFIG.chainId,
 			verifyingContract: env.B402_RELAYER_ADDRESS
 		}
 
