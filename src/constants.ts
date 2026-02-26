@@ -43,9 +43,14 @@ const CHAIN_CONFIGS = {
 
 type NetworkName = keyof typeof tokensByNetwork
 
-const network = (process.env.NETWORK || 'bsc') as NetworkName
+const rawNetwork = process.env.NETWORK || 'bsc'
+if (!(rawNetwork in tokensByNetwork)) {
+	const supported = Object.keys(tokensByNetwork).join(', ')
+	throw new Error(`Invalid NETWORK "${rawNetwork}". Supported: ${supported}`)
+}
+const network = rawNetwork as NetworkName
 
 export const SUPPORTED_TOKENS = tokensByNetwork[network]
 export const CHAIN_CONFIG = CHAIN_CONFIGS[network]
 
-export type SupportedTokenSymbol = keyof (typeof tokensByNetwork)[NetworkName]
+export type SupportedTokenSymbol = keyof typeof SUPPORTED_TOKENS
