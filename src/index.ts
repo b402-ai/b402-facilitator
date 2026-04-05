@@ -7,6 +7,7 @@ import fastifyPlugin from 'fastify-plugin'
 import { rateLimiterHook } from './hooks/rateLimiter'
 import { register as registerB402 } from './routes/b402/b402Routes'
 import { envSchema } from './schema/env'
+import { PermitDepositRelay } from './services/permitDeposit'
 import { connectToDatabase } from './utils/mongooseClient'
 import { initializeProviderService } from './utils/provider'
 
@@ -37,6 +38,34 @@ server.get('/api/version', async () => ({
 
 // Register B402 Routes
 server.register(registerB402, { prefix: '/api/v1' })
+
+// Permit deposit relay (Arbitrum Bridge2)
+server.post<{
+	Body: { user: string; usd: string; deadline: number; v: number; r: string; s: string }
+}>('/api/v1/permit-deposit', async (req, reply) => {
+	try {
+		const relayerKey = process.env.RELAYER_PRIVATE_KEY
+		if (!relayerKey) return reply.status(500).send({ error: 'Relayer not configured' })
+		const relay = new PermitDepositRelay(relayerKey)
+		const result = await relay.submit(req.body)
+		return reply.send({ success: true, ...result })
+	} catch (e: unknown) {
+		const msg = e instanceof Error ? e.message : 'Unknown error'
+		return reply.status(400).send({ success: false, error: msg })
+	}
+})
+
+server.get('/api/v1/permit-deposit/health', async (_req, reply) => {
+	try {
+		const relayerKey = process.env.RELAYER_PRIVATE_KEY
+		if (!relayerKey) return reply.status(500).send({ error: 'Relayer not configured' })
+		const relay = new PermitDepositRelay(relayerKey)
+		return reply.send(await relay.health())
+	} catch (e: unknown) {
+		const msg = e instanceof Error ? e.message : 'Unknown error'
+		return reply.status(500).send({ error: msg })
+	}
+})
 
 // Initialize and run the server
 async function start() {
