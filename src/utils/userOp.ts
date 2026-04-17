@@ -302,151 +302,209 @@ export function validateFeeIncluded(userOp: UserOperation): boolean {
 	}
 }
 
+// ─── In-process bundler ─────────────────────────────────────────────────
+// We skip the external bundler service. The facilitator has already built
+// + signed the UserOp and the paymaster is already deposited into EntryPoint.
+// All we need is `entryPoint.handleOps([userOp], beneficiary)` — one tx,
+// relayer pays gas up-front, paymaster refunds from its EntryPoint deposit.
+
+// EntryPoint v0.7 (0x0000000071727De22E5E9d8BAf0edAc6f37da032) ABI subset
+// PackedUserOperation is what handleOps takes in v0.7 (packed form)
+const ENTRYPOINT_ABI = [
+	'function handleOps((address sender, uint256 nonce, bytes initCode, bytes callData, bytes32 accountGasLimits, uint256 preVerificationGas, bytes32 gasFees, bytes paymasterAndData, bytes signature)[] calldata ops, address payable beneficiary) external',
+	'function getUserOpHash((address sender, uint256 nonce, bytes initCode, bytes callData, bytes32 accountGasLimits, uint256 preVerificationGas, bytes32 gasFees, bytes paymasterAndData, bytes signature) calldata userOp) external view returns (bytes32)',
+	'event UserOperationEvent(bytes32 indexed userOpHash, address indexed sender, address indexed paymaster, uint256 nonce, bool success, uint256 actualGasCost, uint256 actualGasUsed)'
+]
+
+/**
+ * Pack a UserOperation from the JSON-RPC format into the EntryPoint v0.7
+ * packed form. The RPC form has separate fields for call/verification gas
+ * and max-fee/priority-fee; handleOps expects them concatenated into bytes32.
+ */
+function packUserOp(userOp: UserOperation) {
+	const toBN = (v: string | number | bigint) => BigInt(v)
+	const pack2x16 = (hi: bigint, lo: bigint): string => {
+		// each uint128, high 16 bytes | low 16 bytes → bytes32
+		const hiHex = hi.toString(16).padStart(32, '0')
+		const loHex = lo.toString(16).padStart(32, '0')
+		return '0x' + hiHex + loHex
+	}
+	const accountGasLimits = pack2x16(toBN(userOp.verificationGasLimit), toBN(userOp.callGasLimit))
+	const gasFees = pack2x16(toBN(userOp.maxPriorityFeePerGas), toBN(userOp.maxFeePerGas))
+
+	// v0.7: initCode = factory (20 bytes) + factoryData (must include function selector).
+	// walletIncognitoVerify already encodes factoryData as a full createAccount(...) call.
+	const initCode = userOp.factory
+		? ethers.concat([userOp.factory, userOp.factoryData || '0x'])
+		: '0x'
+
+	// v0.7: paymasterAndData = paymaster(20) + vgl(16) + postOpGas(16) + data
+	let paymasterAndData: string = '0x'
+	if (userOp.paymaster && userOp.paymaster !== '0x') {
+		const vgl = toBN(userOp.paymasterVerificationGasLimit || '0')
+		const postOp = toBN(userOp.paymasterPostOpGasLimit || '0')
+		paymasterAndData = ethers.concat([
+			userOp.paymaster,
+			ethers.zeroPadValue(ethers.toBeHex(vgl), 16),
+			ethers.zeroPadValue(ethers.toBeHex(postOp), 16),
+			userOp.paymasterData || '0x'
+		])
+	}
+
+	return {
+		sender: userOp.sender,
+		nonce: toBN(userOp.nonce),
+		initCode,
+		callData: userOp.callData,
+		accountGasLimits,
+		preVerificationGas: toBN(userOp.preVerificationGas),
+		gasFees,
+		paymasterAndData,
+		signature: userOp.signature
+	}
+}
+
 // TODO: Consider using gas estimation after building a valid UserOp to refine the final estimate
-export async function estimateUserOpGas(userOp: UserOperation): Promise<{
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
+export async function estimateUserOpGas(_userOp: UserOperation): Promise<{
 	callGasLimit: string
 	verificationGasLimit: string
 	preVerificationGas: string
 }> {
-	const response = await fetch(env.BUNDLER_RPC_URL, {
-		method: 'POST',
-		headers: {
-			'Content-Type': 'application/json'
-		},
-		body: JSON.stringify({
-			jsonrpc: '2.0',
-			id: 1,
-			method: 'eth_estimateUserOperationGas',
-			params: [userOp, env.ENTRY_POINT_ADDRESS]
-		})
-	})
-
-	const responseText = await response.text()
-
-	if (!response.ok) {
-		console.log('Gas estimation failed with status:', response.status)
-		console.log('Response text:', responseText)
-		throw new BaseErrors.ERR_GAS_ESTIMATION_FAILED()
+	// We build a deterministic UserOp internally — simulation via EntryPoint.simulateHandleOp
+	// is expensive and unreliable. Return conservative fixed defaults; EntryPoint will refund
+	// unused gas to the paymaster deposit.
+	return {
+		callGasLimit: '0x100000', // 1,048,576
+		verificationGasLimit: '0x100000',
+		preVerificationGas: '0x15F90' // 90,000
 	}
+}
 
-	let result: {
-		error?: { message: string; data?: unknown }
-		result?: {
-			callGasLimit: string
-			verificationGasLimit: string
-			preVerificationGas: string
+// UserOperationEvent(bytes32 indexed userOpHash, address indexed sender, address indexed paymaster, uint256 nonce, bool success, uint256 actualGasCost, uint256 actualGasUsed)
+const USER_OPERATION_EVENT_TOPIC =
+	'0x49628fd1471006c1482da88028e9ce4dbb080b815c9b0344d39e5a8e6ec1419f'
+
+/**
+ * Receipt cache populated by submitUserOpToBundler from tx.wait()'s logs.
+ * Avoids redundant log queries in getUserOpReceipt for the common case.
+ * Entries are pruned after 5 min to prevent unbounded growth.
+ */
+interface CachedReceipt {
+	success: boolean
+	txHash: string
+	blockNumber: number
+	cachedAt: number
+}
+const receiptCache = new Map<string, CachedReceipt>()
+const RECEIPT_TTL_MS = 5 * 60 * 1000
+
+function pruneReceiptCache(): void {
+	const now = Date.now()
+	for (const [k, v] of receiptCache) {
+		if (now - v.cachedAt > RECEIPT_TTL_MS) receiptCache.delete(k)
+	}
+}
+
+/**
+ * Parse the EntryPoint UserOperationEvent matching `userOpHash` out of a tx
+ * receipt's logs. Returns null if not found (e.g. UserOp reverted inside
+ * handleOps — EntryPoint still emits, but caller may want to handle success=false).
+ */
+function parseUserOpEventFromReceipt(
+	receipt: ethers.TransactionReceipt,
+	userOpHash: string
+): CachedReceipt | null {
+	const target = userOpHash.toLowerCase()
+	for (const log of receipt.logs) {
+		if (log.topics.length < 4) continue
+		if (log.topics[0].toLowerCase() !== USER_OPERATION_EVENT_TOPIC) continue
+		if (log.topics[1].toLowerCase() !== target) continue
+		// data = abi.encode(uint256 nonce, bool success, uint256 actualGasCost, uint256 actualGasUsed)
+		// success is the 2nd 32-byte word
+		const data = log.data.slice(2)
+		const successWord = data.slice(64, 128)
+		const success = BigInt('0x' + successWord) === 1n
+		return {
+			success,
+			txHash: log.transactionHash,
+			blockNumber: log.blockNumber,
+			cachedAt: Date.now()
 		}
 	}
-
-	try {
-		result = JSON.parse(responseText)
-	} catch (error) {
-		console.log('Failed to parse gas estimation response as JSON')
-		console.log('Response text:', responseText.substring(0, 500))
-		throw new BaseErrors.ERR_GAS_ESTIMATION_PARSE_FAILED()
-	}
-
-	if (result.error) {
-		console.log('Gas estimation returned error:', JSON.stringify(result.error, null, 2))
-		throw new BaseErrors.ERR_GAS_ESTIMATION_ERROR()
-	}
-
-	if (!result.result) {
-		throw new BaseErrors.ERR_GAS_ESTIMATION_NO_RESULT()
-	}
-
-	return result.result
+	return null
 }
 
 export async function submitUserOpToBundler(userOp: UserOperation): Promise<string> {
-	const response = await fetch(env.BUNDLER_RPC_URL, {
-		method: 'POST',
-		headers: {
-			'Content-Type': 'application/json'
-		},
-		body: JSON.stringify({
-			jsonrpc: '2.0',
-			id: 1,
-			method: 'eth_sendUserOperation',
-			params: [userOp, env.ENTRY_POINT_ADDRESS]
-		})
-	})
+	const providerService = getProviderService()
+	const provider = providerService.getProvider()
+	const relayer = new ethers.Wallet(env.RELAYER_PRIVATE_KEY, provider)
+	const entryPoint = new ethers.Contract(env.ENTRY_POINT_ADDRESS, ENTRYPOINT_ABI, relayer)
 
-	const responseText = await response.text()
+	const packed = packUserOp(userOp)
 
-	if (!response.ok) {
-		console.log('Bundler request failed with status:', response.status)
-		console.log('Response text:', responseText)
-		throw new BaseErrors.ERR_BUNDLER_REQUEST_FAILED()
-	}
-
-	let result: {
-		error?: { message: string; data?: unknown }
-		result?: string
-	}
-
+	// Compute userOpHash off-chain via EntryPoint view call (cheap, no gas)
+	let userOpHash: string
 	try {
-		result = JSON.parse(responseText)
-	} catch (error) {
-		console.log('Failed to parse bundler response as JSON')
-		console.log('Response text:', responseText.substring(0, 500))
-		throw new BaseErrors.ERR_BUNDLER_REQUEST_FAILED()
+		userOpHash = (await entryPoint.getUserOpHash(packed)) as string
+	} catch (err) {
+		console.log('getUserOpHash failed:', (err as Error).message)
+		throw new BaseErrors.ERR_BUNDLER_ERROR()
 	}
 
-	if (result.error) {
-		console.log('Bundler returned error:', JSON.stringify(result.error, null, 2))
+	// Submit via handleOps — relayer pays gas, paymaster refunds from EntryPoint deposit
+	try {
+		const tx = await entryPoint.handleOps([packed], relayer.address)
+		const receipt = await tx.wait()
+		if (receipt) {
+			const parsed = parseUserOpEventFromReceipt(receipt, userOpHash)
+			if (parsed) {
+				pruneReceiptCache()
+				receiptCache.set(userOpHash.toLowerCase(), parsed)
+			}
+		}
+	} catch (err) {
+		console.log('handleOps failed:', (err as Error).message)
 		console.log('UserOp that failed:', JSON.stringify(userOp, null, 2))
 		throw new BaseErrors.ERR_BUNDLER_ERROR()
 	}
 
-	return result.result as string
+	return userOpHash
 }
 
+/**
+ * Return the receipt for a UserOp. Reads the cache populated by
+ * submitUserOpToBundler (instant, no RPC). Falls back to a short log query
+ * only if the cache was missed (e.g. process restarted between submit + receipt).
+ */
 export async function getUserOpReceipt(userOpHash: string): Promise<{
 	success: boolean
 	txHash: string
 	blockNumber: number
 }> {
-	const response = await fetch(env.BUNDLER_RPC_URL, {
-		method: 'POST',
-		headers: {
-			'Content-Type': 'application/json'
-		},
-		body: JSON.stringify({
-			jsonrpc: '2.0',
-			id: 1,
-			method: 'eth_getUserOperationReceipt',
-			params: [userOpHash]
-		})
-	})
-
-	if (!response.ok) {
-		throw new BaseErrors.ERR_BUNDLER_REQUEST_FAILED()
+	const cached = receiptCache.get(userOpHash.toLowerCase())
+	if (cached) {
+		return { success: cached.success, txHash: cached.txHash, blockNumber: cached.blockNumber }
 	}
 
-	const result = (await response.json()) as {
-		error?: { message: string }
-		result?: {
-			success: boolean
-			receipt: {
-				transactionHash: string
-				blockNumber: number
-			}
-		}
-	}
+	// Fallback: process restarted between submit and receipt — scan a small
+	// window (not 500 blocks; on L2s handleOps was awaited so the event is
+	// within the most recent few blocks).
+	const providerService = getProviderService()
+	const provider = providerService.getProvider()
+	const entryPoint = new ethers.Contract(env.ENTRY_POINT_ADDRESS, ENTRYPOINT_ABI, provider)
+	const filter = entryPoint.filters.UserOperationEvent(userOpHash)
+	const latest = await provider.getBlockNumber()
+	const fromBlock = Math.max(0, latest - 20)
+	const events = await entryPoint.queryFilter(filter, fromBlock, latest)
 
-	if (result.error) {
-		throw new BaseErrors.ERR_BUNDLER_ERROR()
-	}
-
-	const receipt = result.result
-	if (!receipt) {
+	if (events.length === 0) {
 		throw new BaseErrors.ERR_NO_RECEIPT()
 	}
-
+	const log = events[events.length - 1] as ethers.EventLog
 	return {
-		success: receipt.success,
-		txHash: receipt.receipt.transactionHash,
-		blockNumber: receipt.receipt.blockNumber
+		success: Boolean(log.args?.success),
+		txHash: log.transactionHash,
+		blockNumber: log.blockNumber
 	}
 }

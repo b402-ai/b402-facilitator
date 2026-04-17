@@ -33,22 +33,41 @@ const tokensByNetwork = {
 			address: '0xfde4C96c8593536E31F229EA8f37b2ADa2699bb2',
 			decimals: 6
 		}
+	},
+	arb: {
+		USDC: {
+			symbol: 'USDC',
+			address: '0xaf88d065e77c8cC2239327C5EDb3A432268e5831',
+			decimals: 6
+		},
+		USDT: {
+			symbol: 'USDT',
+			address: '0xFd086bC7CD5C481DCC9C85ebE478A1C0b69FCbb9',
+			decimals: 6
+		}
 	}
 } as const
 
 const CHAIN_CONFIGS = {
 	bsc: { chainId: 56, name: 'bsc' },
-	base: { chainId: 8453, name: 'base' }
+	base: { chainId: 8453, name: 'base' },
+	arb: { chainId: 42161, name: 'arb' }
 } as const
 
 type NetworkName = keyof typeof tokensByNetwork
 
-const rawNetwork = process.env.NETWORK || 'bsc'
-if (!(rawNetwork in tokensByNetwork)) {
+// Normalize NETWORK env to the canonical lowercase key used in tokensByNetwork.
+// Accepts:  'bsc' | 'base' | 'arbitrum' | 'arb' (case-insensitive)
+function normalizeNetwork(raw: string): NetworkName {
+	const lower = raw.toLowerCase()
+	if (lower === 'arbitrum' || lower === 'arb') return 'arb'
+	if (lower === 'base' || lower === 'base-mainnet') return 'base'
+	if (lower === 'bsc' || lower === 'bnb' || lower === 'bsc-mainnet') return 'bsc'
 	const supported = Object.keys(tokensByNetwork).join(', ')
-	throw new Error(`Invalid NETWORK "${rawNetwork}". Supported: ${supported}`)
+	throw new Error(`Invalid NETWORK "${raw}". Supported: ${supported}, arbitrum`)
 }
-const network = rawNetwork as NetworkName
+
+const network = normalizeNetwork(process.env.NETWORK || 'bsc')
 
 export const SUPPORTED_TOKENS = tokensByNetwork[network]
 export const CHAIN_CONFIG = CHAIN_CONFIGS[network]
