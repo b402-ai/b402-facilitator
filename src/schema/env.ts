@@ -18,7 +18,7 @@ interface IEnvSchema {
 
 	// ERC-4337 Smart Wallet Configuration
 	ENTRY_POINT_ADDRESS: string
-	BUNDLER_RPC_URL: string
+	BUNDLER_RPC_URL?: string
 	PAYMASTER_ADDRESS: string
 	PAYMASTER_SIGNER_KEY: string
 	WALLET_PAYMENT_FEE: string
@@ -53,7 +53,8 @@ export const envSchema: JSONSchemaType<IEnvSchema> = {
 		'RELAYER_PRIVATE_KEY',
 		'B402_RELAYER_ADDRESS',
 		'ENTRY_POINT_ADDRESS',
-		'BUNDLER_RPC_URL',
+		// BUNDLER_RPC_URL no longer required — base/arb use in-process bundler.
+		// Still read optionally for BSC flows via chains.ts.
 		'PAYMASTER_ADDRESS',
 		'PAYMASTER_SIGNER_KEY',
 		'WALLET_PAYMENT_FEE',
@@ -69,13 +70,13 @@ export const envSchema: JSONSchemaType<IEnvSchema> = {
 
 		RPC_URL: { type: 'string', default: 'https://bsc-dataseed.binance.org' },
 
-		NETWORK: { type: 'string', default: 'bsc', enum: ['bsc', 'base'] },
+		NETWORK: { type: 'string', default: 'bsc', enum: ['bsc', 'base', 'arbitrum', 'arb'] },
 
 		RELAYER_PRIVATE_KEY: { type: 'string' },
 		B402_RELAYER_ADDRESS: { type: 'string' },
 
 		ENTRY_POINT_ADDRESS: { type: 'string' },
-		BUNDLER_RPC_URL: { type: 'string' },
+		BUNDLER_RPC_URL: { type: 'string', nullable: true },
 		PAYMASTER_ADDRESS: { type: 'string' },
 		PAYMASTER_SIGNER_KEY: { type: 'string' },
 		WALLET_PAYMENT_FEE: { type: 'string' },
@@ -103,7 +104,8 @@ function getEnv(): IEnvSchema {
 		'RELAYER_PRIVATE_KEY',
 		'B402_RELAYER_ADDRESS',
 		'ENTRY_POINT_ADDRESS',
-		'BUNDLER_RPC_URL',
+		// BUNDLER_RPC_URL no longer required — facilitator uses in-process bundler
+		// (calls entryPoint.handleOps() directly via relayer wallet)
 		'PAYMASTER_ADDRESS',
 		'PAYMASTER_SIGNER_KEY',
 		'WALLET_PAYMENT_FEE',
@@ -127,7 +129,7 @@ function getEnv(): IEnvSchema {
 		RELAYER_PRIVATE_KEY: process.env.RELAYER_PRIVATE_KEY as string,
 		B402_RELAYER_ADDRESS: process.env.B402_RELAYER_ADDRESS as string,
 		ENTRY_POINT_ADDRESS: process.env.ENTRY_POINT_ADDRESS as string,
-		BUNDLER_RPC_URL: process.env.BUNDLER_RPC_URL as string,
+		BUNDLER_RPC_URL: process.env.BUNDLER_RPC_URL,
 		PAYMASTER_ADDRESS: process.env.PAYMASTER_ADDRESS as string,
 		PAYMASTER_SIGNER_KEY: process.env.PAYMASTER_SIGNER_KEY as string,
 		WALLET_PAYMENT_FEE: process.env.WALLET_PAYMENT_FEE as string,

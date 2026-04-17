@@ -56,12 +56,18 @@ const CHAIN_CONFIGS = {
 
 type NetworkName = keyof typeof tokensByNetwork
 
-const rawNetwork = process.env.NETWORK || 'bsc'
-if (!(rawNetwork in tokensByNetwork)) {
+// Normalize NETWORK env to the canonical lowercase key used in tokensByNetwork.
+// Accepts:  'bsc' | 'base' | 'arbitrum' | 'arb' (case-insensitive)
+function normalizeNetwork(raw: string): NetworkName {
+	const lower = raw.toLowerCase()
+	if (lower === 'arbitrum' || lower === 'arb') return 'arb'
+	if (lower === 'base' || lower === 'base-mainnet') return 'base'
+	if (lower === 'bsc' || lower === 'bnb' || lower === 'bsc-mainnet') return 'bsc'
 	const supported = Object.keys(tokensByNetwork).join(', ')
-	throw new Error(`Invalid NETWORK "${rawNetwork}". Supported: ${supported}`)
+	throw new Error(`Invalid NETWORK "${raw}". Supported: ${supported}, arbitrum`)
 }
-const network = rawNetwork as NetworkName
+
+const network = normalizeNetwork(process.env.NETWORK || 'bsc')
 
 export const SUPPORTED_TOKENS = tokensByNetwork[network]
 export const CHAIN_CONFIG = CHAIN_CONFIGS[network]

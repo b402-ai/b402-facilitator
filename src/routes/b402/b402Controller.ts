@@ -2050,8 +2050,15 @@ export async function walletIncognitoVerify(request: FastifyRequest, reply: Fast
 			nonce: ethers.toBeHex(walletNonce),
 			factory: needsDeployment ? env.NEXUS_ACCOUNT_FACTORY_ADDRESS : undefined,
 			factoryData: needsDeployment
-				? encodeNexusAccountCreation(ownerEOA) +
-					ethers.zeroPadValue(ethers.toBeHex(BigInt(salt || '0')), 32).slice(2)
+				? (() => {
+						const initData = encodeNexusAccountCreation(ownerEOA)
+						const saltBytes32 = ethers.zeroPadValue(ethers.toBeHex(BigInt(salt || '0')), 32)
+						// Nexus factory: createAccount(bytes initData, bytes32 salt)  (selector 0xea6d13ac)
+						const iface = new ethers.Interface([
+							'function createAccount(bytes initData, bytes32 salt) returns (address)'
+						])
+						return iface.encodeFunctionData('createAccount', [initData, saltBytes32])
+					})()
 				: undefined,
 			callData,
 			callGasLimit: ethers.toBeHex(2000000), // High enough for shield/unshield
