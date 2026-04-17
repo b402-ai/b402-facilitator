@@ -381,6 +381,60 @@ export async function estimateUserOpGas(_userOp: UserOperation): Promise<{
 	}
 }
 
+// UserOperationEvent(bytes32 indexed userOpHash, address indexed sender, address indexed paymaster, uint256 nonce, bool success, uint256 actualGasCost, uint256 actualGasUsed)
+const USER_OPERATION_EVENT_TOPIC =
+	'0x49628fd1471006c1482da88028e9ce4dbb080b815c9b0344d39e5a8e6ec1419f'
+
+/**
+ * Receipt cache populated by submitUserOpToBundler from tx.wait()'s logs.
+ * Avoids redundant log queries in getUserOpReceipt for the common case.
+ * Entries are pruned after 5 min to prevent unbounded growth.
+ */
+interface CachedReceipt {
+	success: boolean
+	txHash: string
+	blockNumber: number
+	cachedAt: number
+}
+const receiptCache = new Map<string, CachedReceipt>()
+const RECEIPT_TTL_MS = 5 * 60 * 1000
+
+function pruneReceiptCache(): void {
+	const now = Date.now()
+	for (const [k, v] of receiptCache) {
+		if (now - v.cachedAt > RECEIPT_TTL_MS) receiptCache.delete(k)
+	}
+}
+
+/**
+ * Parse the EntryPoint UserOperationEvent matching `userOpHash` out of a tx
+ * receipt's logs. Returns null if not found (e.g. UserOp reverted inside
+ * handleOps — EntryPoint still emits, but caller may want to handle success=false).
+ */
+function parseUserOpEventFromReceipt(
+	receipt: ethers.TransactionReceipt,
+	userOpHash: string
+): CachedReceipt | null {
+	const target = userOpHash.toLowerCase()
+	for (const log of receipt.logs) {
+		if (log.topics.length < 4) continue
+		if (log.topics[0].toLowerCase() !== USER_OPERATION_EVENT_TOPIC) continue
+		if (log.topics[1].toLowerCase() !== target) continue
+		// data = abi.encode(uint256 nonce, bool success, uint256 actualGasCost, uint256 actualGasUsed)
+		// success is the 2nd 32-byte word
+		const data = log.data.slice(2)
+		const successWord = data.slice(64, 128)
+		const success = BigInt('0x' + successWord) === 1n
+		return {
+			success,
+			txHash: log.transactionHash,
+			blockNumber: log.blockNumber,
+			cachedAt: Date.now()
+		}
+	}
+	return null
+}
+
 export async function submitUserOpToBundler(userOp: UserOperation): Promise<string> {
 	const providerService = getProviderService()
 	const provider = providerService.getProvider()
@@ -401,7 +455,14 @@ export async function submitUserOpToBundler(userOp: UserOperation): Promise<stri
 	// Submit via handleOps — relayer pays gas, paymaster refunds from EntryPoint deposit
 	try {
 		const tx = await entryPoint.handleOps([packed], relayer.address)
-		await tx.wait()
+		const receipt = await tx.wait()
+		if (receipt) {
+			const parsed = parseUserOpEventFromReceipt(receipt, userOpHash)
+			if (parsed) {
+				pruneReceiptCache()
+				receiptCache.set(userOpHash.toLowerCase(), parsed)
+			}
+		}
 	} catch (err) {
 		console.log('handleOps failed:', (err as Error).message)
 		console.log('UserOp that failed:', JSON.stringify(userOp, null, 2))
@@ -412,38 +473,37 @@ export async function submitUserOpToBundler(userOp: UserOperation): Promise<stri
 }
 
 /**
- * Look up a UserOp receipt from the EntryPoint's UserOperationEvent logs.
- * submitUserOpToBundler already awaited the handleOps tx, so by the time this
- * is called the event is on-chain. We search recent blocks for the matching hash.
+ * Return the receipt for a UserOp. Reads the cache populated by
+ * submitUserOpToBundler (instant, no RPC). Falls back to a short log query
+ * only if the cache was missed (e.g. process restarted between submit + receipt).
  */
 export async function getUserOpReceipt(userOpHash: string): Promise<{
 	success: boolean
 	txHash: string
 	blockNumber: number
 }> {
+	const cached = receiptCache.get(userOpHash.toLowerCase())
+	if (cached) {
+		return { success: cached.success, txHash: cached.txHash, blockNumber: cached.blockNumber }
+	}
+
+	// Fallback: process restarted between submit and receipt — scan a small
+	// window (not 500 blocks; on L2s handleOps was awaited so the event is
+	// within the most recent few blocks).
 	const providerService = getProviderService()
 	const provider = providerService.getProvider()
 	const entryPoint = new ethers.Contract(env.ENTRY_POINT_ADDRESS, ENTRYPOINT_ABI, provider)
-
-	// UserOperationEvent has userOpHash as first indexed topic
 	const filter = entryPoint.filters.UserOperationEvent(userOpHash)
-
-	// Search the last ~500 blocks (5 min on L2s) — handleOps was just awaited, so
-	// the event must be within the last handful of blocks.
 	const latest = await provider.getBlockNumber()
-	const fromBlock = Math.max(0, latest - 500)
+	const fromBlock = Math.max(0, latest - 20)
 	const events = await entryPoint.queryFilter(filter, fromBlock, latest)
 
 	if (events.length === 0) {
 		throw new BaseErrors.ERR_NO_RECEIPT()
 	}
-
-	const event = events[events.length - 1] // most recent match
-	const log = event as ethers.EventLog
-	const success = Boolean(log.args?.success)
-
+	const log = events[events.length - 1] as ethers.EventLog
 	return {
-		success,
+		success: Boolean(log.args?.success),
 		txHash: log.transactionHash,
 		blockNumber: log.blockNumber
 	}
