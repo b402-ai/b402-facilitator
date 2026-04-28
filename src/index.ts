@@ -7,6 +7,9 @@ import fastifyPlugin from 'fastify-plugin'
 import { rateLimiterHook } from './hooks/rateLimiter'
 import { register as registerB402 } from './routes/b402/b402Routes'
 import { envSchema } from './schema/env'
+import { PermitDepositRelay } from './services/permitDeposit'
+import { connectToDatabase } from './utils/mongooseClient'
+import { initializeProviderService } from './utils/provider'
 
 const server = fastify({
 	logger: true
@@ -36,16 +39,55 @@ server.get('/api/version', async () => ({
 // Register B402 Routes
 server.register(registerB402, { prefix: '/api/v1' })
 
+// Permit deposit relay (Arbitrum Bridge2)
+server.post<{
+	Body: { user: string; usd: string; deadline: number; v: number; r: string; s: string }
+}>('/api/v1/permit-deposit', async (req, reply) => {
+	try {
+		const relayerKey = process.env.RELAYER_PRIVATE_KEY
+		if (!relayerKey) return reply.status(500).send({ error: 'Relayer not configured' })
+		const relay = new PermitDepositRelay(relayerKey)
+		const result = await relay.submit(req.body)
+		return reply.send({ success: true, ...result })
+	} catch (e: unknown) {
+		const msg = e instanceof Error ? e.message : 'Unknown error'
+		return reply.status(400).send({ success: false, error: msg })
+	}
+})
+
+server.get('/api/v1/permit-deposit/health', async (_req, reply) => {
+	try {
+		const relayerKey = process.env.RELAYER_PRIVATE_KEY
+		if (!relayerKey) return reply.status(500).send({ error: 'Relayer not configured' })
+		const relay = new PermitDepositRelay(relayerKey)
+		return reply.send(await relay.health())
+	} catch (e: unknown) {
+		const msg = e instanceof Error ? e.message : 'Unknown error'
+		return reply.status(500).send({ error: msg })
+	}
+})
+
 // Initialize and run the server
 async function start() {
 	try {
-		await server.listen({
-			port: Number(process.env.SERVER_PORT || 3402),
-			host: process.env.SERVER_HOST || '0.0.0.0'
+		await server.ready()
+
+		initializeProviderService({
+			RPC_URL: server.config.RPC_URL
 		})
 
+		server.log.info(`Provider service initialized for network: ${server.config.NETWORK}`)
+
+		await connectToDatabase()
+		server.log.info('Connected to MongoDB')
+
+		const port = Number(process.env.SERVER_PORT || 3402)
+		const host = process.env.SERVER_HOST || '0.0.0.0'
+
+		await server.listen({ port, host })
+
 		server.log.info('B402 Facilitator Service')
-		server.log.info(`Listening on http://localhost:${process.env.SERVER_PORT || 3402}`)
+		server.log.info(`Listening on http://${host}:${port}`)
 	} catch (err) {
 		server.log.error(err)
 		process.exit(1)

@@ -9,6 +9,7 @@ dist
 # testing
 coverage
 test/
+scripts/
 
 # misc
 .DS_Store

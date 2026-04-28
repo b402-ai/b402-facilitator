@@ -34,3 +34,7 @@ yarn-error.log*
 
 # TypeScript
 *.tsbuildinfo
+.railgun-artifacts/
+
+# Local scripts (deprecated)
+scripts/

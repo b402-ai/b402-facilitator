@@ -37,9 +37,26 @@ export const PaymentRequirementsSchema = {
 	type: 'object',
 	properties: {
 		network: { type: 'string' },
-		relayerContract: { type: 'string' }
+		relayerContract: { type: 'string' },
+		deployment: {
+			type: 'object',
+			properties: {
+				payerAddress: { type: 'string' },
+				ownerAddress: { type: 'string' },
+				salts: {
+					type: 'array',
+					items: { type: 'string' },
+					minItems: 1,
+					maxItems: 10
+				},
+				fundingRequested: { type: 'boolean' },
+				token: { type: 'string' }
+			},
+			required: ['ownerAddress', 'salts', 'token'],
+			additionalProperties: false
+		}
 	},
-	required: ['network', 'relayerContract'],
+	required: ['network'],
 	additionalProperties: false
 } as const
 
@@ -105,6 +122,606 @@ export const HealthResponseSchema = {
 	additionalProperties: false
 } as const
 
+// POST /deploy/verify - Request (EOA payment)
+export const DeployEOAVerifyRequestSchema = {
+	type: 'object',
+	properties: {
+		paymentPayload: {
+			type: 'array',
+			items: PaymentPayloadSchema,
+			minItems: 1,
+			maxItems: 11 // 1 fee payment + up to 10 funding payments
+		},
+		paymentRequirements: PaymentRequirementsSchema
+	},
+	required: ['paymentPayload', 'paymentRequirements'],
+	additionalProperties: false
+} as const
+
+// POST /deploy/wallet/verify - Request (Smart wallet payment)
+export const DeployWalletVerifyRequestSchema = {
+	type: 'object',
+	properties: {
+		paymentRequirements: PaymentRequirementsSchema
+	},
+	required: ['paymentRequirements'],
+	additionalProperties: false
+} as const
+
+// POST /wallet/deploy/verify - Response
+export const DeployWalletsVerifyResponseSchema = {
+	type: 'object',
+	properties: {
+		isValid: { type: 'boolean' },
+		payer: { type: 'string' },
+		wallets: {
+			type: 'array',
+			items: {
+				type: 'object',
+				properties: {
+					address: { type: 'string' },
+					salt: { type: 'string' },
+					owner: { type: 'string' },
+					fundingAmount: { type: 'string' }
+				},
+				required: ['address', 'salt', 'owner'],
+				additionalProperties: false
+			}
+		},
+		deploymentFee: { type: 'string' },
+		fundingFees: { type: 'string' },
+		totalFees: { type: 'string' },
+		userOp: { type: 'object', additionalProperties: true },
+		userOpHash: { type: 'string' },
+		invalidReason: { type: 'string' }
+	},
+	required: ['isValid', 'wallets', 'deploymentFee'],
+	additionalProperties: true
+} as const
+
+// POST /deploy/settle - Request (EOA payment)
+export const DeployEOASettleRequestSchema = {
+	type: 'object',
+	properties: {
+		paymentPayload: {
+			type: 'array',
+			items: PaymentPayloadSchema,
+			minItems: 1,
+			maxItems: 11
+		},
+		paymentRequirements: PaymentRequirementsSchema,
+		wallets: {
+			type: 'array',
+			items: {
+				type: 'object',
+				properties: {
+					address: { type: 'string' },
+					salt: { type: 'string' },
+					owner: { type: 'string' },
+					fundingAmount: { type: 'string' }
+				},
+				required: ['address', 'salt', 'owner'],
+				additionalProperties: false
+			},
+			minItems: 1,
+			maxItems: 10
+		}
+	},
+	required: ['paymentPayload', 'paymentRequirements', 'wallets'],
+	additionalProperties: false
+} as const
+
+// POST /deploy/wallet/settle - Request (Smart wallet payment)
+export const DeployWalletSettleRequestSchema = {
+	type: 'object',
+	properties: {
+		userOp: { type: 'object' },
+		signature: { type: 'string' },
+		paymentRequirements: PaymentRequirementsSchema,
+		wallets: {
+			type: 'array',
+			items: {
+				type: 'object',
+				properties: {
+					address: { type: 'string' },
+					salt: { type: 'string' },
+					owner: { type: 'string' },
+					fundingAmount: { type: 'string' }
+				},
+				required: ['address', 'salt', 'owner'],
+				additionalProperties: false
+			},
+			minItems: 1,
+			maxItems: 10
+		}
+	},
+	required: ['userOp', 'signature', 'paymentRequirements', 'wallets'],
+	additionalProperties: false
+} as const
+
+// POST /wallet/deploy/settle - Response
+export const DeployWalletsResponseSchema = {
+	type: 'object',
+	properties: {
+		paymentSuccess: { type: 'boolean' },
+		deploymentSuccess: { type: 'boolean' },
+		fundingSuccess: { type: 'boolean' },
+		wallets: {
+			type: 'array',
+			items: {
+				type: 'object',
+				properties: {
+					address: { type: 'string' },
+					salt: { type: 'string' },
+					owner: { type: 'string' },
+					deploymentTxHash: { type: 'string' },
+					fundingAmount: { type: 'string' },
+					fundingTxHash: { type: 'string' },
+					fundingCompleted: { type: 'boolean' }
+				},
+				required: ['address', 'salt', 'owner'],
+				additionalProperties: false
+			}
+		},
+		failedWallets: {
+			type: 'array',
+			items: {
+				type: 'object',
+				properties: {
+					address: { type: 'string' },
+					salt: { type: 'string' },
+					owner: { type: 'string' },
+					deploymentTxHash: { type: 'string' }
+				},
+				required: ['address', 'salt', 'owner'],
+				additionalProperties: false
+			}
+		},
+		failedFundings: {
+			type: 'array',
+			items: {
+				type: 'object',
+				properties: {
+					address: { type: 'string' },
+					salt: { type: 'string' },
+					owner: { type: 'string' },
+					fundingAmount: { type: 'string' }
+				},
+				required: ['address', 'salt', 'owner'],
+				additionalProperties: false
+			}
+		},
+		paymentTxHash: { type: 'string' },
+		deploymentFee: { type: 'string' }
+	},
+	required: [
+		'paymentSuccess',
+		'deploymentSuccess',
+		'fundingSuccess',
+		'wallets',
+		'paymentTxHash',
+		'deploymentFee'
+	],
+	additionalProperties: false
+} as const
+
+// POST /wallet/claim - Request
+export const ClaimWalletDeploymentRequestSchema = {
+	type: 'object',
+	properties: {
+		paymentTxHash: { type: 'string' },
+		payerAddress: { type: 'string' }
+	},
+	additionalProperties: false
+} as const
+
+// POST /wallet/claim - Response
+export const ClaimWalletDeploymentResponseSchema = {
+	type: 'object',
+	properties: {
+		success: { type: 'boolean' },
+		deployments: {
+			type: 'object',
+			properties: {
+				successful: {
+					type: 'array',
+					items: {
+						type: 'object',
+						properties: {
+							address: { type: 'string' },
+							salt: { type: 'string' },
+							owner: { type: 'string' },
+							deploymentTxHash: { type: 'string' },
+							needsFundingUpdate: { type: 'boolean' }
+						},
+						required: ['address', 'salt', 'owner', 'deploymentTxHash'],
+						additionalProperties: false
+					}
+				},
+				failed: {
+					type: 'array',
+					items: {
+						type: 'object',
+						properties: {
+							address: { type: 'string' },
+							salt: { type: 'string' },
+							owner: { type: 'string' },
+							error: { type: 'string' }
+						},
+						required: ['address', 'salt', 'owner', 'error'],
+						additionalProperties: false
+					}
+				}
+			},
+			required: ['successful', 'failed'],
+			additionalProperties: false
+		},
+		funding: {
+			type: 'object',
+			properties: {
+				successful: {
+					type: 'array',
+					items: {
+						type: 'object',
+						properties: {
+							address: { type: 'string' },
+							fundingTxHash: { type: 'string' },
+							fundingAmount: { type: 'string' }
+						},
+						required: ['address', 'fundingTxHash', 'fundingAmount'],
+						additionalProperties: false
+					}
+				},
+				failed: {
+					type: 'array',
+					items: {
+						type: 'object',
+						properties: {
+							address: { type: 'string' },
+							reason: { type: 'string' },
+							fundingAmount: { type: 'string' }
+						},
+						required: ['address', 'reason'],
+						additionalProperties: false
+					}
+				}
+			},
+			required: ['successful', 'failed'],
+			additionalProperties: false
+		},
+		network: { type: 'string' }
+	},
+	required: ['success', 'deployments', 'funding', 'network'],
+	additionalProperties: false
+} as const
+
+// GET /wallet/:owner - Response
+export const GetWalletsByOwnerResponseSchema = {
+	type: 'object',
+	properties: {
+		master: {
+			type: 'array',
+			items: {
+				type: 'object',
+				properties: {
+					ownerAddress: { type: 'string' },
+					walletAddress: { type: 'string' },
+					salt: { type: 'string' },
+					payerAddress: { type: 'string' },
+					paymentTxHash: { type: 'string' },
+					deploymentTxHash: { type: 'string' },
+					paymentCompleted: { type: 'boolean' },
+					deploymentCompleted: { type: 'boolean' },
+					feePaymentToken: { type: 'string' },
+					fundingToken: { type: 'string' },
+					fundingRequested: { type: 'boolean' },
+					fundingCompleted: { type: 'boolean' },
+					fundingAmount: { type: 'string' },
+					fundingTxHash: { type: 'string' },
+					createdAt: { type: 'string' },
+					updatedAt: { type: 'string' }
+				},
+				required: [
+					'ownerAddress',
+					'walletAddress',
+					'salt',
+					'payerAddress',
+					'paymentTxHash',
+					'paymentCompleted',
+					'deploymentCompleted',
+					'fundingRequested',
+					'fundingCompleted',
+					'createdAt',
+					'updatedAt'
+				],
+				additionalProperties: false
+			}
+		},
+		sub: {
+			type: 'array',
+			items: {
+				type: 'object',
+				properties: {
+					ownerAddress: { type: 'string' },
+					walletAddress: { type: 'string' },
+					salt: { type: 'string' },
+					payerAddress: { type: 'string' },
+					paymentTxHash: { type: 'string' },
+					deploymentTxHash: { type: 'string' },
+					paymentCompleted: { type: 'boolean' },
+					deploymentCompleted: { type: 'boolean' },
+					feePaymentToken: { type: 'string' },
+					fundingToken: { type: 'string' },
+					fundingRequested: { type: 'boolean' },
+					fundingCompleted: { type: 'boolean' },
+					fundingAmount: { type: 'string' },
+					fundingTxHash: { type: 'string' },
+					createdAt: { type: 'string' },
+					updatedAt: { type: 'string' }
+				},
+				required: [
+					'ownerAddress',
+					'walletAddress',
+					'salt',
+					'payerAddress',
+					'paymentTxHash',
+					'paymentCompleted',
+					'deploymentCompleted',
+					'fundingRequested',
+					'fundingCompleted',
+					'createdAt',
+					'updatedAt'
+				],
+				additionalProperties: false
+			}
+		}
+	},
+	required: ['master', 'sub'],
+	additionalProperties: false
+} as const
+
+// Transaction schema for batch payments
+export const TransactionSchema = {
+	type: 'object',
+	properties: {
+		to: { type: 'string' },
+		amount: { type: 'string' },
+		token: { type: 'string' }
+	},
+	required: ['to', 'amount', 'token'],
+	additionalProperties: false
+} as const
+
+// POST /wallet/verify - Request
+export const VerifyWalletPaymentRequestSchema = {
+	type: 'object',
+	properties: {
+		walletAddress: { type: 'string' },
+		transactions: {
+			type: 'array',
+			items: TransactionSchema,
+			minItems: 1
+		},
+		paymentRequirements: {
+			type: 'object',
+			properties: {
+				network: { type: 'string' }
+			},
+			additionalProperties: false
+		}
+	},
+	required: ['walletAddress', 'transactions'],
+	additionalProperties: false
+} as const
+
+// POST /wallet/verify - Response
+export const VerifyWalletPaymentResponseSchema = {
+	type: 'object',
+	properties: {
+		isValid: { type: 'boolean' },
+		payer: { type: 'string' },
+		userOp: {
+			type: 'object',
+			properties: {
+				sender: { type: 'string' },
+				nonce: { type: 'string' },
+				// ERC-4337 v0.7 unpacked fields (optional)
+				factory: { type: 'string' },
+				factoryData: { type: 'string' },
+				callData: { type: 'string' },
+				callGasLimit: { type: 'string' },
+				verificationGasLimit: { type: 'string' },
+				preVerificationGas: { type: 'string' },
+				maxFeePerGas: { type: 'string' },
+				maxPriorityFeePerGas: { type: 'string' },
+				// ERC-4337 v0.7 unpacked paymaster fields (optional)
+				paymaster: { type: 'string' },
+				paymasterVerificationGasLimit: { type: 'string' },
+				paymasterPostOpGasLimit: { type: 'string' },
+				paymasterData: { type: 'string' },
+				signature: { type: 'string' }
+			},
+			required: [
+				'sender',
+				'nonce',
+				'callData',
+				'callGasLimit',
+				'verificationGasLimit',
+				'preVerificationGas',
+				'maxFeePerGas',
+				'maxPriorityFeePerGas',
+				'signature'
+			],
+			additionalProperties: false
+		},
+		userOpHash: { type: 'string' },
+		feeAmount: { type: 'string' },
+		totalAmount: { type: 'string' },
+		invalidReason: { type: 'string' }
+	},
+	required: ['isValid', 'userOp', 'userOpHash', 'feeAmount', 'totalAmount'],
+	additionalProperties: false
+} as const
+
+// POST /wallet/settle - Request
+export const SettleWalletPaymentRequestSchema = {
+	type: 'object',
+	properties: {
+		userOp: {
+			type: 'object',
+			properties: {
+				sender: { type: 'string' },
+				nonce: { type: 'string' },
+				// ERC-4337 v0.7 unpacked fields (optional)
+				factory: { type: 'string' },
+				factoryData: { type: 'string' },
+				callData: { type: 'string' },
+				callGasLimit: { type: 'string' },
+				verificationGasLimit: { type: 'string' },
+				preVerificationGas: { type: 'string' },
+				maxFeePerGas: { type: 'string' },
+				maxPriorityFeePerGas: { type: 'string' },
+				// ERC-4337 v0.7 unpacked paymaster fields (optional)
+				paymaster: { type: 'string' },
+				paymasterVerificationGasLimit: { type: 'string' },
+				paymasterPostOpGasLimit: { type: 'string' },
+				paymasterData: { type: 'string' },
+				signature: { type: 'string' }
+			},
+			required: [
+				'sender',
+				'nonce',
+				'callData',
+				'callGasLimit',
+				'verificationGasLimit',
+				'preVerificationGas',
+				'maxFeePerGas',
+				'maxPriorityFeePerGas',
+				'signature'
+			],
+			additionalProperties: false
+		},
+		signature: { type: 'string' },
+		paymentRequirements: {
+			type: 'object',
+			properties: {
+				network: { type: 'string' }
+			},
+			additionalProperties: false
+		}
+	},
+	required: ['userOp', 'signature'],
+	additionalProperties: false
+} as const
+
+// Payment detail schema
+export const PaymentDetailSchema = {
+	type: 'object',
+	properties: {
+		recipient: { type: 'string' },
+		amount: { type: 'string' },
+		isProtocolFee: { type: 'boolean' }
+	},
+	required: ['recipient', 'amount', 'isProtocolFee'],
+	additionalProperties: false
+} as const
+
+// POST /wallet/settle - Response
+export const SettleWalletPaymentResponseSchema = {
+	type: 'object',
+	properties: {
+		success: { type: 'boolean' },
+		txHash: { type: 'string' },
+		userOpHash: { type: 'string' },
+		network: { type: 'string' },
+		payments: {
+			type: 'array',
+			items: PaymentDetailSchema,
+			minItems: 1
+		},
+		errorReason: { type: 'string' }
+	},
+	required: ['success', 'txHash', 'userOpHash', 'network', 'payments'],
+	additionalProperties: false
+} as const
+
+// TypeScript interfaces for wallet endpoints
+export interface CreateWalletRequest {
+	ownerAddress: string
+}
+
+export interface CreateWalletResponse {
+	walletAddress: string
+	txHash: string
+}
+
+export interface Transaction {
+	to: string
+	amount: string
+	token: string
+}
+
+export interface VerifyWalletRequest {
+	walletAddress: string
+	transactions: Transaction[]
+	paymentRequirements?: {
+		network?: string
+	}
+}
+
+export interface UserOperation {
+	sender: string
+	nonce: string
+	// ERC-4337 v0.7 unpacked factory fields
+	factory?: string
+	factoryData?: string
+	callData: string
+	callGasLimit: string
+	verificationGasLimit: string
+	preVerificationGas: string
+	maxFeePerGas: string
+	maxPriorityFeePerGas: string
+	// ERC-4337 v0.7 unpacked paymaster fields
+	paymaster?: string
+	paymasterVerificationGasLimit?: string
+	paymasterPostOpGasLimit?: string
+	paymasterData?: string
+	signature: string
+}
+
+export interface VerifyWalletResponse {
+	isValid: boolean
+	payer?: string
+	userOp: UserOperation
+	userOpHash: string
+	feeAmount: string
+	totalAmount: string
+	invalidReason?: string
+}
+
+export interface SettleWalletRequest {
+	userOp: UserOperation
+	signature: string
+	paymentRequirements?: {
+		network?: string
+	}
+}
+
+export interface PaymentDetail {
+	recipient: string
+	amount: string
+	isProtocolFee: boolean
+}
+
+export interface SettleWalletResponse {
+	success: boolean
+	txHash: string
+	userOpHash: string
+	network: string
+	payments: PaymentDetail[]
+	errorReason?: string
+}
+
 // TypeScript interfaces
 export interface Authorization {
 	from: string
@@ -125,7 +742,15 @@ export interface PaymentPayload {
 
 export interface PaymentRequirements {
 	network: string
-	relayerContract: string
+	relayerContract?: string
+	// Only used in /wallet/deploy routes
+	deployment?: {
+		payerAddress: string
+		ownerAddress: string
+		salts: string[]
+		fundingRequested?: boolean
+		token: string
+	}
 }
 
 export interface VerifyRequest {
@@ -158,4 +783,239 @@ export interface HealthResponse {
 	service: string
 	network: string
 	relayer: string
+}
+
+// Wallet deployment interfaces
+export interface DeployedWallet {
+	address: string
+	salt: string
+	owner: string
+	deploymentTxHash?: string
+}
+
+// EOA deployment interfaces
+export interface DeployEOAVerifyRequest {
+	paymentPayload: PaymentPayload[]
+	paymentRequirements: PaymentRequirements
+}
+
+export interface DeployEOASettleRequest {
+	paymentPayload: PaymentPayload[]
+	paymentRequirements: PaymentRequirements
+	wallets: Array<Omit<DeployedWallet, 'deploymentTxHash'> & { fundingAmount?: string }>
+}
+
+// Smart wallet deployment interfaces
+export interface DeployWalletVerifyRequest {
+	paymentRequirements: PaymentRequirements
+}
+
+export interface DeployWalletSettleRequest {
+	userOp: UserOperation
+	signature: string
+	paymentRequirements: PaymentRequirements
+	wallets: Array<Omit<DeployedWallet, 'deploymentTxHash'> & { fundingAmount?: string }>
+}
+
+// Common response interface (used by both EOA and smart wallet)
+export interface DeployWalletsVerifyResponse {
+	isValid: boolean
+	payer?: string
+	wallets: Array<Omit<DeployedWallet, 'deploymentTxHash'> & { fundingAmount?: string }>
+	deploymentFee: string
+	fundingFees?: string
+	totalFees?: string
+	invalidReason?: string
+}
+
+export interface DeployWalletsResponse {
+	paymentSuccess: boolean
+	deploymentSuccess: boolean
+	fundingSuccess: boolean
+	wallets: Array<
+		DeployedWallet & {
+			fundingAmount?: string
+			fundingTxHash?: string
+			fundingCompleted?: boolean
+		}
+	>
+	failedWallets?: DeployedWallet[]
+	failedFundings?: Array<{
+		address: string
+		salt: string
+		owner: string
+		fundingAmount: string
+	}>
+	paymentTxHash: string
+	deploymentFee: string
+}
+
+export interface ClaimWalletDeploymentRequest {
+	paymentTxHash?: string
+	payerAddress?: string
+}
+
+export interface ClaimWalletDeploymentResponse {
+	success: boolean
+	deployments: {
+		successful: Array<{
+			address: string
+			salt: string
+			owner: string
+			deploymentTxHash: string
+			needsFundingUpdate?: boolean
+		}>
+		failed: Array<{
+			address: string
+			salt: string
+			owner: string
+			error: string
+		}>
+	}
+	funding: {
+		successful: Array<{
+			address: string
+			fundingTxHash: string
+			fundingAmount: string
+		}>
+		failed: Array<{
+			address: string
+			reason: string
+			fundingAmount?: string
+		}>
+	}
+	network: string
+}
+
+export interface WalletDeploymentRecord {
+	ownerAddress: string
+	walletAddress: string
+	salt: string
+	payerAddress: string
+	paymentTxHash: string
+	deploymentTxHash?: string
+	paymentCompleted: boolean
+	deploymentCompleted: boolean
+	feePaymentToken?: string
+	fundingToken?: string
+	fundingRequested: boolean
+	fundingCompleted: boolean
+	fundingAmount?: string
+	fundingTxHash?: string
+	createdAt: string
+	updatedAt: string
+}
+
+export interface GetWalletsByOwnerResponse {
+	master: WalletDeploymentRecord[]
+	sub: WalletDeploymentRecord[]
+}
+
+// GET /wallet/:owner/master - Response
+export const GetMasterWalletAddressResponseSchema = {
+	type: 'object',
+	properties: {
+		ownerAddress: { type: 'string' },
+		masterWalletAddress: { type: 'string' },
+		salt: { type: 'string' }
+	},
+	required: ['ownerAddress', 'masterWalletAddress', 'salt'],
+	additionalProperties: false
+} as const
+
+export interface GetMasterWalletAddressResponse {
+	ownerAddress: string
+	masterWalletAddress: string
+	salt: string
+}
+
+// Wallet Incognito Schemas
+export const WalletCallSchema = {
+	type: 'object',
+	properties: {
+		to: { type: 'string' },
+		value: { type: 'string' },
+		data: { type: 'string' }
+	},
+	required: ['to', 'value', 'data'],
+	additionalProperties: false
+} as const
+
+export const WalletIncognitoVerifyRequestSchema = {
+	type: 'object',
+	properties: {
+		ownerEOA: { type: 'string' },
+		walletAddress: { type: 'string' },
+		salt: { type: 'string' },
+		calls: { type: 'array', items: WalletCallSchema, maxItems: 3 }
+	},
+	required: ['ownerEOA', 'walletAddress', 'calls'],
+	additionalProperties: false
+} as const
+
+export const WalletIncognitoVerifyResponseSchema = {
+	type: 'object',
+	properties: {
+		isValid: { type: 'boolean' },
+		userOp: { type: 'object', additionalProperties: true },
+		userOpHash: { type: 'string' },
+		needsDeployment: { type: 'boolean' },
+		invalidReason: { type: 'string' }
+	},
+	required: ['isValid'],
+	additionalProperties: false
+} as const
+
+export const WalletIncognitoSettleRequestSchema = {
+	type: 'object',
+	properties: {
+		userOp: { type: 'object', additionalProperties: true }
+	},
+	required: ['userOp'],
+	additionalProperties: false
+} as const
+
+export const WalletIncognitoSettleResponseSchema = {
+	type: 'object',
+	properties: {
+		success: { type: 'boolean' },
+		userOpHash: { type: 'string' },
+		txHash: { type: 'string' },
+		errorReason: { type: 'string' }
+	},
+	required: ['success'],
+	additionalProperties: false
+} as const
+
+// Wallet Incognito Interfaces
+export interface WalletCall {
+	to: string
+	value: string
+	data: string
+}
+
+export interface WalletIncognitoVerifyRequest {
+	ownerEOA: string
+	walletAddress: string
+	salt?: string
+	calls: WalletCall[]
+}
+
+export interface WalletIncognitoVerifyResponse {
+	isValid: boolean
+	userOp?: UserOperation
+	userOpHash?: string
+	needsDeployment?: boolean
+	invalidReason?: string
+}
+
+export interface WalletIncognitoSettleRequest {
+	userOp: UserOperation
+}
+
+export interface WalletIncognitoSettleResponse {
+	success: boolean
+	userOpHash?: string
+	txHash?: string
+	errorReason?: string
 }
