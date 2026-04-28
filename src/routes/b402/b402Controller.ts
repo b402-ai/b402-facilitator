@@ -37,6 +37,7 @@ import {
 	createPaymentUserOpOrThrow,
 	decodeExecuteBatch,
 	encodeExecuteBatch,
+	fetchUserOpRevertReason,
 	getUserOpReceipt,
 	submitUserOpToBundler,
 	validateFeeIncluded
@@ -2131,14 +2132,21 @@ export async function walletIncognitoSettle(request: FastifyRequest, reply: Fast
 		const maxPolls = 30
 		let txHash = ''
 
+		let opSuccess = false
+		let revertReason: string | undefined
 		for (let i = 0; i < maxPolls; i++) {
 			await new Promise((resolve) => setTimeout(resolve, pollIntervalMs))
 			try {
 				const receipt = await getUserOpReceipt(userOpHash)
-				if (receipt.success) {
-					txHash = receipt.txHash
-					break
-				}
+				txHash = receipt.txHash
+				opSuccess = receipt.success
+				if (receipt.success) break
+				// UserOp landed but reverted on execution — surface the real reason now
+				// instead of polling forever and reporting a misleading "timeout".
+				revertReason = await fetchUserOpRevertReason(receipt.txHash, userOpHash).catch(
+					() => 'UserOp reverted on execution'
+				)
+				break
 			} catch {
 				// Continue polling
 			}
@@ -2149,6 +2157,16 @@ export async function walletIncognitoSettle(request: FastifyRequest, reply: Fast
 				success: false,
 				userOpHash,
 				errorReason: 'Transaction confirmation timeout'
+			}
+			return response
+		}
+
+		if (!opSuccess) {
+			const response: WalletIncognitoSettleResponse = {
+				success: false,
+				userOpHash,
+				txHash,
+				errorReason: revertReason || 'UserOp reverted on execution'
 			}
 			return response
 		}

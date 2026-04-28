@@ -454,10 +454,28 @@ export async function submitUserOpToBundler(userOp: UserOperation): Promise<stri
 
 	// Submit via handleOps — relayer pays gas, paymaster refunds from EntryPoint deposit
 	try {
+		console.log(
+			`[bundler] submitting userOpHash=${userOpHash}, sender=${userOp.sender}, nonce=${userOp.nonce}`
+		)
 		const tx = await entryPoint.handleOps([packed], relayer.address)
+		console.log(`[bundler] handleOps tx submitted: ${tx.hash}`)
 		const receipt = await tx.wait()
+		console.log(
+			`[bundler] receipt: status=${receipt?.status}, logs=${receipt?.logs?.length ?? 0}, blockNumber=${receipt?.blockNumber}`
+		)
 		if (receipt) {
 			const parsed = parseUserOpEventFromReceipt(receipt, userOpHash)
+			console.log(
+				`[bundler] parsed UserOpEvent for our hash: ${parsed ? `success=${parsed.success} txHash=${parsed.txHash}` : 'NOT FOUND IN RECEIPT'}`
+			)
+			if (!parsed && receipt.logs) {
+				console.log(`[bundler] receipt log topics (first 5):`)
+				for (const log of receipt.logs.slice(0, 5)) {
+					console.log(
+						`  addr=${log.address} topic0=${log.topics[0]?.slice(0, 16)}.. topic1=${log.topics[1]?.slice(0, 16)}..`
+					)
+				}
+			}
 			if (parsed) {
 				pruneReceiptCache()
 				receiptCache.set(userOpHash.toLowerCase(), parsed)
@@ -477,6 +495,53 @@ export async function submitUserOpToBundler(userOp: UserOperation): Promise<stri
  * submitUserOpToBundler (instant, no RPC). Falls back to a short log query
  * only if the cache was missed (e.g. process restarted between submit + receipt).
  */
+/**
+ * Decode the UserOperationRevertReason event for a given userOp inside a tx
+ * and return a human-readable reason. Falls back to the raw hex if it can't
+ * decode the inner revert.
+ */
+export async function fetchUserOpRevertReason(txHash: string, userOpHash: string): Promise<string> {
+	const REVERT_TOPIC = '0x1c4fada7374c0a9ee8841fc38afe82932dc0f8e69012e927f061a8bae611a201'
+	const provider = getProviderService().getProvider()
+	const receipt = await provider.getTransactionReceipt(txHash)
+	if (!receipt) return 'UserOp reverted (no receipt available)'
+	const target = userOpHash.toLowerCase()
+	for (const log of receipt.logs) {
+		if (log.topics[0]?.toLowerCase() !== REVERT_TOPIC) continue
+		if (log.topics[1]?.toLowerCase() !== target) continue
+		// data: nonce(32) + offset(32) + len(32) + revertReason(padded)
+		const data = log.data.slice(2)
+		const offset = parseInt(data.slice(64, 128), 16)
+		const lenAt = offset * 2
+		const len = parseInt(data.slice(lenAt, lenAt + 64), 16)
+		const inner = '0x' + data.slice(lenAt + 64, lenAt + 64 + len * 2)
+		// Try Error(string)
+		if (inner.startsWith('0x08c379a0')) {
+			try {
+				const [msg] = ethers.AbiCoder.defaultAbiCoder().decode(['string'], '0x' + inner.slice(10))
+				return `UserOp reverted: ${msg as string}`
+			} catch {
+				// fall through to next decoder
+			}
+		}
+		// Try CallFailed(uint256,bytes)
+		if (inner.startsWith('0x5c0dee5d')) {
+			try {
+				const [idx, innerBytes] = ethers.AbiCoder.defaultAbiCoder().decode(
+					['uint256', 'bytes'],
+					'0x' + inner.slice(10)
+				)
+				const detail = (innerBytes as string) === '0x' ? '(empty revert)' : (innerBytes as string)
+				return `CallFailed at index ${idx.toString()}: ${detail}`
+			} catch {
+				// fall through to next decoder
+			}
+		}
+		return `UserOp reverted with raw data: ${inner}`
+	}
+	return 'UserOp reverted (no UserOperationRevertReason log found)'
+}
+
 export async function getUserOpReceipt(userOpHash: string): Promise<{
 	success: boolean
 	txHash: string
