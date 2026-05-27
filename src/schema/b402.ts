@@ -947,7 +947,7 @@ export const WalletIncognitoVerifyRequestSchema = {
 		ownerEOA: { type: 'string' },
 		walletAddress: { type: 'string' },
 		salt: { type: 'string' },
-		calls: { type: 'array', items: WalletCallSchema, maxItems: 3 }
+		calls: { type: 'array', items: WalletCallSchema, maxItems: 8 }
 	},
 	required: ['ownerEOA', 'walletAddress', 'calls'],
 	additionalProperties: false
@@ -986,6 +986,41 @@ export const WalletIncognitoSettleResponseSchema = {
 	required: ['success'],
 	additionalProperties: false
 } as const
+
+// Relayer-direct relay() submission — the relay is authorized by its embedded
+// ZK proof, so the facilitator's relayer can submit it as a plain tx and the
+// buyer's smart wallet never appears on-chain. `to` is restricted to RelayAdapt.
+export const WalletIncognitoRelayRequestSchema = {
+	type: 'object',
+	properties: {
+		to: { type: 'string' },
+		data: { type: 'string' }
+	},
+	required: ['to', 'data'],
+	additionalProperties: false
+} as const
+
+export const WalletIncognitoRelayResponseSchema = {
+	type: 'object',
+	properties: {
+		success: { type: 'boolean' },
+		txHash: { type: 'string' },
+		errorReason: { type: 'string' }
+	},
+	required: ['success'],
+	additionalProperties: false
+} as const
+
+export interface WalletIncognitoRelayRequest {
+	to: string
+	data: string
+}
+
+export interface WalletIncognitoRelayResponse {
+	success: boolean
+	txHash?: string
+	errorReason?: string
+}
 
 // Wallet Incognito Interfaces
 export interface WalletCall {

@@ -21,6 +21,8 @@ import type {
 	VerifyResponse,
 	VerifyWalletRequest,
 	VerifyWalletResponse,
+	WalletIncognitoRelayRequest,
+	WalletIncognitoRelayResponse,
 	WalletIncognitoSettleRequest,
 	WalletIncognitoSettleResponse,
 	WalletIncognitoVerifyRequest,
@@ -2127,9 +2129,12 @@ export async function walletIncognitoSettle(request: FastifyRequest, reply: Fast
 			throw new BaseErrors.ERR_BUNDLER_SUBMISSION_FAILED()
 		}
 
-		// Wait for receipt
+		// Wait for receipt.
+		// 2026-05-04: bumped maxPolls 30 → 120 (180s ceiling) after Arqen
+		// launch funding hit consistent ~50s bundler latency on unshield
+		// userOps. See leverage-bot/.local/bundler-latency-investigation.md.
 		const pollIntervalMs = 1500
-		const maxPolls = 30
+		const maxPolls = 120
 		let txHash = ''
 
 		let opSuccess = false
@@ -2178,6 +2183,61 @@ export async function walletIncognitoSettle(request: FastifyRequest, reply: Fast
 		}
 
 		return response
+	} catch (error) {
+		return handleAndReturnErrorResponse(reply, error)
+	}
+}
+
+// RelayAdapt contracts the relayer is allowed to call. The relay() is
+// self-authorized by its embedded ZK proof and RelayAdapt holds no persistent
+// funds, so the relayer's assets are never at risk — only gas. `to` is still
+// restricted so the relayer can never be made to call an arbitrary contract.
+const RELAY_ADAPT_ALLOWLIST = new Set<string>([
+	'0xb0bc6d50098519c2a030661338f82a8792b85404' // Base RelayAdapt (b402 Railgun fork)
+])
+
+/**
+ * Function for route `/wallet/incognito/relay`
+ * Submit a proof-authorized RelayAdapt.relay() as a plain tx from the relayer,
+ * so the buyer's smart wallet never appears on-chain (used by escrowToHook).
+ *
+ * NOTE (production hardening): add auth / rate-limiting / gas accounting here —
+ * an unauthenticated caller can make the relayer pay gas for valid relays
+ * (gas-griefing). Funds are never at risk; gas is.
+ */
+export async function walletIncognitoRelay(request: FastifyRequest, reply: FastifyReply) {
+	try {
+		const { to, data } = request.body as WalletIncognitoRelayRequest
+
+		if (!to || !RELAY_ADAPT_ALLOWLIST.has(to.toLowerCase())) {
+			const r: WalletIncognitoRelayResponse = {
+				success: false,
+				errorReason: '`to` must be an allowlisted RelayAdapt contract'
+			}
+			return r
+		}
+		if (!data || !data.startsWith('0x') || data.length < 10) {
+			const r: WalletIncognitoRelayResponse = { success: false, errorReason: 'invalid calldata' }
+			return r
+		}
+
+		const provider = getProviderService().getProvider()
+		const relayer = new Wallet(request.server.config.RELAYER_PRIVATE_KEY, provider)
+
+		const tx = await relayer.sendTransaction({ to, data, gasLimit: 3_000_000n })
+		const receipt = await tx.wait()
+
+		if (!receipt || receipt.status !== 1) {
+			const r: WalletIncognitoRelayResponse = {
+				success: false,
+				txHash: tx.hash,
+				errorReason: 'relay() reverted on-chain'
+			}
+			return r
+		}
+
+		const r: WalletIncognitoRelayResponse = { success: true, txHash: tx.hash }
+		return r
 	} catch (error) {
 		return handleAndReturnErrorResponse(reply, error)
 	}

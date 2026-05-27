@@ -20,6 +20,8 @@ import {
 	VerifyResponseSchema,
 	VerifyWalletPaymentRequestSchema,
 	VerifyWalletPaymentResponseSchema,
+	WalletIncognitoRelayRequestSchema,
+	WalletIncognitoRelayResponseSchema,
 	WalletIncognitoSettleRequestSchema,
 	WalletIncognitoSettleResponseSchema,
 	WalletIncognitoVerifyRequestSchema,
@@ -60,6 +62,7 @@ import {
 	verifyDeploymentByEOA,
 	verifyDeploymentBySmartWallet,
 	verifyWalletPayment,
+	walletIncognitoRelay,
 	walletIncognitoSettle,
 	walletIncognitoVerify
 } from './b402Controller'
@@ -251,6 +254,19 @@ export const register = (server: FastifyInstance, _: any, next: any) => {
 			}
 		},
 		walletIncognitoSettle
+	)
+
+	server.post(
+		'/wallet/incognito/relay',
+		{
+			schema: {
+				body: WalletIncognitoRelayRequestSchema,
+				response: {
+					200: WalletIncognitoRelayResponseSchema
+				}
+			}
+		},
+		walletIncognitoRelay
 	)
 
 	// Swap routes
