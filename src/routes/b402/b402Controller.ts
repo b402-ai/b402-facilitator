@@ -42,7 +42,8 @@ import {
 	fetchUserOpRevertReason,
 	getUserOpReceipt,
 	submitUserOpToBundler,
-	validateFeeIncluded
+	validateFeeIncluded,
+	waitForUserOpReceipt
 } from '../../utils/userOp'
 import {
 	computeMasterWalletAddress,
@@ -363,24 +364,10 @@ export async function settleWalletPayment(request: FastifyRequest, reply: Fastif
 			throw new BaseErrors.ERR_BUNDLER_SUBMISSION_FAILED()
 		}
 
-		// Wait for receipt
+		// Wait for receipt (check-first, fast poll — see waitForUserOpReceipt)
 		let txHash = ''
-		try {
-			for (let i = 0; i < 30; i++) {
-				await new Promise((resolve) => setTimeout(resolve, 1500))
-				try {
-					const receipt = await getUserOpReceipt(userOpHash)
-					if (receipt.success) {
-						txHash = receipt.txHash
-						break
-					}
-				} catch {
-					// Continue polling
-				}
-			}
-		} catch (error) {
-			console.log('Error waiting for receipt:', error)
-		}
+		const receiptA = await waitForUserOpReceipt(userOpHash)
+		if (receiptA) txHash = receiptA.txHash
 
 		if (!txHash) {
 			throw new BaseErrors.ERR_TRANSACTION_CONFIRMATION_FAILED()
@@ -1394,22 +1381,10 @@ export async function settleDeploymentBySmartWallet(request: FastifyRequest, rep
 		// Wait for receipt
 		let paymentTxHash = ''
 		let paymentSuccess = false
-		try {
-			for (let i = 0; i < 30; i++) {
-				await new Promise((resolve) => setTimeout(resolve, 2000))
-				try {
-					const receipt = await getUserOpReceipt(userOpHash)
-					if (receipt.success) {
-						paymentTxHash = receipt.txHash
-						paymentSuccess = true
-						break
-					}
-				} catch {
-					// Continue polling
-				}
-			}
-		} catch {
-			throw new BaseErrors.ERR_TRANSACTION_CONFIRMATION_FAILED()
+		const paymentReceiptPoll = await waitForUserOpReceipt(userOpHash)
+		if (paymentReceiptPoll) {
+			paymentTxHash = paymentReceiptPoll.txHash
+			paymentSuccess = true
 		}
 
 		if (!paymentSuccess || !paymentTxHash) {
@@ -2133,14 +2108,17 @@ export async function walletIncognitoSettle(request: FastifyRequest, reply: Fast
 		// 2026-05-04: bumped maxPolls 30 → 120 (180s ceiling) after Arqen
 		// launch funding hit consistent ~50s bundler latency on unshield
 		// userOps. See leverage-bot/.local/bundler-latency-investigation.md.
-		const pollIntervalMs = 1500
-		const maxPolls = 120
+		// Check-FIRST then sleep (was sleep-1500-then-check, a guaranteed floor). Keep the
+		// 180s ceiling for occasional slow bundler latency; poll at 600ms now that the
+		// provider pollingInterval is 500ms.
+		const pollIntervalMs = 600
+		const timeoutMs = 180_000
+		const deadline = Date.now() + timeoutMs
 		let txHash = ''
 
 		let opSuccess = false
 		let revertReason: string | undefined
-		for (let i = 0; i < maxPolls; i++) {
-			await new Promise((resolve) => setTimeout(resolve, pollIntervalMs))
+		for (;;) {
 			try {
 				const receipt = await getUserOpReceipt(userOpHash)
 				txHash = receipt.txHash
@@ -2153,8 +2131,10 @@ export async function walletIncognitoSettle(request: FastifyRequest, reply: Fast
 				)
 				break
 			} catch {
-				// Continue polling
+				// receipt not available yet — keep polling
 			}
+			if (Date.now() >= deadline) break
+			await new Promise((resolve) => setTimeout(resolve, pollIntervalMs))
 		}
 
 		if (!txHash) {
@@ -2593,24 +2573,9 @@ export async function swapWalletSettle(request: FastifyRequest, reply: FastifyRe
 		}
 
 		let txHash = ''
-		let confirmed = false
-		for (let i = 0; i < 30; i++) {
-			await new Promise((resolve) => setTimeout(resolve, 2000))
-			try {
-				const receipt = await getUserOpReceipt(userOpHash)
-				if (receipt.success) {
-					txHash = receipt.txHash
-					confirmed = true
-					break
-				}
-			} catch {
-				// Continue polling
-			}
-		}
-
-		if (!confirmed) {
-			throw new BaseErrors.ERR_TRANSACTION_CONFIRMATION_FAILED()
-		}
+		const settleReceipt = await waitForUserOpReceipt(userOpHash)
+		if (settleReceipt) txHash = settleReceipt.txHash
+		else throw new BaseErrors.ERR_TRANSACTION_CONFIRMATION_FAILED()
 
 		const swapService = getSwapService()
 		const swapResult = await swapService.executeSwapFromTransfer(body.swapParams)

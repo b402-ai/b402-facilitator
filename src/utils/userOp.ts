@@ -435,6 +435,27 @@ function parseUserOpEventFromReceipt(
 	return null
 }
 
+// Serialize ONLY the nonce-allocation + broadcast of handleOps from this instance
+// so two concurrent requests can never grab the same relayer nonce. The receipt is
+// awaited OUTSIDE this lock, so many handleOps txs are in-flight at once — throughput
+// is not serialized (each op just gets a distinct, monotonic nonce). Cross-instance
+// races on a shared relayer EOA are additionally absorbed by the pending-nonce
+// refetch + fee-bump retry below.
+let _relayerChain: Promise<unknown> = Promise.resolve()
+function withRelayerLock<T>(fn: () => Promise<T>): Promise<T> {
+	const next = _relayerChain.then(fn, fn)
+	_relayerChain = next.then(
+		() => undefined,
+		() => undefined
+	)
+	return next as Promise<T>
+}
+
+const _isTransientNonceError = (msg: string): boolean =>
+	/nonce too low|replacement (transaction )?underpriced|replacement fee too low|already known|fee too low|known transaction/i.test(
+		msg
+	)
+
 export async function submitUserOpToBundler(userOp: UserOperation): Promise<string> {
 	const providerService = getProviderService()
 	const provider = providerService.getProvider()
@@ -452,13 +473,52 @@ export async function submitUserOpToBundler(userOp: UserOperation): Promise<stri
 		throw new BaseErrors.ERR_BUNDLER_ERROR()
 	}
 
-	// Submit via handleOps — relayer pays gas, paymaster refunds from EntryPoint deposit
+	// Broadcast handleOps with an EXPLICIT, freshly-fetched pending nonce and (on
+	// retry) bumped EIP-1559 fees. Serialized per instance; retried on nonce/fee
+	// collisions. Returns once the tx is broadcast — NOT after it mines.
+	const MAX_ATTEMPTS = 5
+	let tx: ethers.TransactionResponse
 	try {
-		console.log(
-			`[bundler] submitting userOpHash=${userOpHash}, sender=${userOp.sender}, nonce=${userOp.nonce}`
-		)
-		const tx = await entryPoint.handleOps([packed], relayer.address)
-		console.log(`[bundler] handleOps tx submitted: ${tx.hash}`)
+		tx = await withRelayerLock(async () => {
+			for (let attempt = 0; ; attempt++) {
+				// Fresh pending nonce every attempt — correct even when the relayer EOA
+				// is shared across instances (in-memory nonce tracking would be wrong).
+				const nonce = await provider.getTransactionCount(relayer.address, 'pending')
+				let overrides: ethers.Overrides = { nonce }
+				if (attempt > 0) {
+					// Re-price so a replacement clears the prior fee (bump 40%/attempt).
+					const fee = await provider.getFeeData()
+					const b = BigInt(100 + 40 * attempt)
+					let maxFee = ((fee.maxFeePerGas ?? fee.gasPrice ?? 1_000_000n) * b) / 100n
+					let prio = ((fee.maxPriorityFeePerGas ?? fee.gasPrice ?? 1_000_000n) * b) / 100n
+					if (prio > maxFee) prio = maxFee // EIP-1559 invariant
+					overrides = { nonce, maxFeePerGas: maxFee, maxPriorityFeePerGas: prio }
+				}
+				try {
+					console.log(
+						`[bundler] submit userOpHash=${userOpHash} sender=${userOp.sender} relayerNonce=${nonce} attempt=${attempt}`
+					)
+					return await entryPoint.handleOps([packed], relayer.address, overrides)
+				} catch (err) {
+					const msg = (err as Error).message || ''
+					if (attempt < MAX_ATTEMPTS - 1 && _isTransientNonceError(msg)) {
+						console.log(`[bundler] transient submit error (attempt ${attempt}), retrying: ${msg}`)
+						await new Promise((r) => setTimeout(r, 250 * (attempt + 1)))
+						continue
+					}
+					throw err
+				}
+			}
+		})
+	} catch (err) {
+		console.log('handleOps submit failed:', (err as Error).message)
+		console.log('UserOp that failed:', JSON.stringify(userOp, null, 2))
+		throw new BaseErrors.ERR_BUNDLER_ERROR()
+	}
+
+	// Await the receipt OUTSIDE the relayer lock so submissions stay concurrent.
+	console.log(`[bundler] handleOps tx submitted: ${tx.hash}`)
+	try {
 		const receipt = await tx.wait()
 		console.log(
 			`[bundler] receipt: status=${receipt?.status}, logs=${receipt?.logs?.length ?? 0}, blockNumber=${receipt?.blockNumber}`
@@ -468,22 +528,13 @@ export async function submitUserOpToBundler(userOp: UserOperation): Promise<stri
 			console.log(
 				`[bundler] parsed UserOpEvent for our hash: ${parsed ? `success=${parsed.success} txHash=${parsed.txHash}` : 'NOT FOUND IN RECEIPT'}`
 			)
-			if (!parsed && receipt.logs) {
-				console.log(`[bundler] receipt log topics (first 5):`)
-				for (const log of receipt.logs.slice(0, 5)) {
-					console.log(
-						`  addr=${log.address} topic0=${log.topics[0]?.slice(0, 16)}.. topic1=${log.topics[1]?.slice(0, 16)}..`
-					)
-				}
-			}
 			if (parsed) {
 				pruneReceiptCache()
 				receiptCache.set(userOpHash.toLowerCase(), parsed)
 			}
 		}
 	} catch (err) {
-		console.log('handleOps failed:', (err as Error).message)
-		console.log('UserOp that failed:', JSON.stringify(userOp, null, 2))
+		console.log('handleOps wait failed:', (err as Error).message)
 		throw new BaseErrors.ERR_BUNDLER_ERROR()
 	}
 
@@ -540,6 +591,33 @@ export async function fetchUserOpRevertReason(txHash: string, userOpHash: string
 		return `UserOp reverted with raw data: ${inner}`
 	}
 	return 'UserOp reverted (no UserOperationRevertReason log found)'
+}
+
+/**
+ * Poll for a successful UserOp receipt, checking FIRST then sleeping briefly. The old loops
+ * slept 1.5-2s BEFORE the first check (a guaranteed latency floor even when the op landed in
+ * ~1s) and polled coarsely. This checks immediately and polls every `intervalMs` until
+ * `timeoutMs`, returning the receipt on success or `null` on timeout (call sites keep their
+ * own throw/continue semantics). Combined with the 500ms provider pollingInterval this is the
+ * core settle-latency fix.
+ */
+export async function waitForUserOpReceipt(
+	userOpHash: string,
+	opts: { intervalMs?: number; timeoutMs?: number } = {}
+): Promise<{ success: boolean; txHash: string; blockNumber: number } | null> {
+	const intervalMs = opts.intervalMs ?? 600
+	const timeoutMs = opts.timeoutMs ?? 60_000
+	const deadline = Date.now() + timeoutMs
+	for (;;) {
+		try {
+			const receipt = await getUserOpReceipt(userOpHash)
+			if (receipt.success) return receipt
+		} catch {
+			// receipt not available yet — keep polling
+		}
+		if (Date.now() >= deadline) return null
+		await new Promise((r) => setTimeout(r, intervalMs))
+	}
 }
 
 export async function getUserOpReceipt(userOpHash: string): Promise<{

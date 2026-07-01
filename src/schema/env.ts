@@ -70,7 +70,11 @@ export const envSchema: JSONSchemaType<IEnvSchema> = {
 
 		RPC_URL: { type: 'string', default: 'https://bsc-dataseed.binance.org' },
 
-		NETWORK: { type: 'string', default: 'bsc', enum: ['bsc', 'base', 'arbitrum', 'arb'] },
+		NETWORK: {
+			type: 'string',
+			default: 'bsc',
+			enum: ['bsc', 'base', 'arbitrum', 'arb', 'ethereum', 'eth']
+		},
 
 		RELAYER_PRIVATE_KEY: { type: 'string' },
 		B402_RELAYER_ADDRESS: { type: 'string' },

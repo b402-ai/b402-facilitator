@@ -45,13 +45,26 @@ const tokensByNetwork = {
 			address: '0xFd086bC7CD5C481DCC9C85ebE478A1C0b69FCbb9',
 			decimals: 6
 		}
+	},
+	eth: {
+		USDC: {
+			symbol: 'USDC',
+			address: '0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48',
+			decimals: 6
+		},
+		USDT: {
+			symbol: 'USDT',
+			address: '0xdAC17F958D2ee523a2206206994597C13D831ec7',
+			decimals: 6
+		}
 	}
 } as const
 
 const CHAIN_CONFIGS = {
 	bsc: { chainId: 56, name: 'bsc' },
 	base: { chainId: 8453, name: 'base' },
-	arb: { chainId: 42161, name: 'arb' }
+	arb: { chainId: 42161, name: 'arb' },
+	eth: { chainId: 1, name: 'eth' }
 } as const
 
 type NetworkName = keyof typeof tokensByNetwork
@@ -60,6 +73,7 @@ type NetworkName = keyof typeof tokensByNetwork
 // Accepts:  'bsc' | 'base' | 'arbitrum' | 'arb' (case-insensitive)
 function normalizeNetwork(raw: string): NetworkName {
 	const lower = raw.toLowerCase()
+	if (lower === 'ethereum' || lower === 'eth' || lower === 'mainnet-eth') return 'eth'
 	if (lower === 'arbitrum' || lower === 'arb') return 'arb'
 	if (lower === 'base' || lower === 'base-mainnet') return 'base'
 	if (lower === 'bsc' || lower === 'bnb' || lower === 'bsc-mainnet') return 'bsc'

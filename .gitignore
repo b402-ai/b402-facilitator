@@ -23,6 +23,9 @@ yarn-error.log*
 .env.development.local
 .env.test.local
 .env.production.local
+# Per-chain secret env files (.env.arb / .env.base / .env.eth …) — hold relayer + paymaster keys, NEVER commit.
+.env.*
+!.env.example
 
 # IDE
 .claude/

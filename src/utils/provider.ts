@@ -12,10 +12,15 @@ export class ProviderService {
 		this.chainId = CHAIN_CONFIG.chainId
 		this.network = CHAIN_CONFIG.name
 
-		this.provider = new ethers.JsonRpcProvider(config.RPC_URL, {
-			chainId: this.chainId,
-			name: this.network
+		// staticNetwork avoids a per-request eth_chainId round-trip; pollingInterval 500ms
+		// (vs ethers' 4000ms default) makes tx.wait() detect Base's ~2s blocks promptly —
+		// the dominant settle-latency fix, since the settle path chains several tx.wait().
+		const network = ethers.Network.from({ chainId: this.chainId, name: this.network })
+		this.provider = new ethers.JsonRpcProvider(config.RPC_URL, network, {
+			staticNetwork: network,
+			pollingInterval: 500
 		})
+		this.provider.pollingInterval = 500
 	}
 
 	getProvider(): JsonRpcProvider {
