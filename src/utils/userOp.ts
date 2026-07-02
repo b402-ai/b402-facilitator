@@ -398,6 +398,10 @@ interface CachedReceipt {
 }
 const receiptCache = new Map<string, CachedReceipt>()
 const RECEIPT_TTL_MS = 5 * 60 * 1000
+// FAST SETTLE: return the moment handleOps is BROADCAST (tx.hash final) instead of waiting for it to MINE.
+// On Ethereum mainnet mining is ~12–50s — intolerable UX. verify() already simulated the UserOp, so a
+// post-broadcast revert is rare; the receipt is still confirmed in the background. Off => old blocking behavior.
+const SETTLE_RETURN_ON_BROADCAST = process.env.SETTLE_RETURN_ON_BROADCAST === 'true'
 
 function pruneReceiptCache(): void {
 	const now = Date.now()
@@ -516,9 +520,10 @@ export async function submitUserOpToBundler(userOp: UserOperation): Promise<stri
 		throw new BaseErrors.ERR_BUNDLER_ERROR()
 	}
 
-	// Await the receipt OUTSIDE the relayer lock so submissions stay concurrent.
+	// tx is BROADCAST here; tx.hash is final. Confirming (tx.wait) is the slow part on mainnet.
 	console.log(`[bundler] handleOps tx submitted: ${tx.hash}`)
-	try {
+	// Wait for the receipt, parse the UserOpEvent, cache the REAL success/blockNumber.
+	const confirm = async (): Promise<void> => {
 		const receipt = await tx.wait()
 		console.log(
 			`[bundler] receipt: status=${receipt?.status}, logs=${receipt?.logs?.length ?? 0}, blockNumber=${receipt?.blockNumber}`
@@ -533,6 +538,18 @@ export async function submitUserOpToBundler(userOp: UserOperation): Promise<stri
 				receiptCache.set(userOpHash.toLowerCase(), parsed)
 			}
 		}
+	}
+
+	if (SETTLE_RETURN_ON_BROADCAST) {
+		// Cache the txHash optimistically so getUserOpReceipt returns it NOW; confirm in the background.
+		pruneReceiptCache()
+		receiptCache.set(userOpHash.toLowerCase(), { success: true, txHash: tx.hash, blockNumber: 0, cachedAt: Date.now() })
+		void confirm().catch((err) => console.log('[bundler] background confirm failed:', (err as Error).message))
+		return userOpHash
+	}
+
+	try {
+		await confirm()
 	} catch (err) {
 		console.log('handleOps wait failed:', (err as Error).message)
 		throw new BaseErrors.ERR_BUNDLER_ERROR()
