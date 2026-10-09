@@ -26,6 +26,8 @@
 		"dist",
 		"src/services/agent",
 		"src/services/privacy/__tests__",
-		"src/utils/railgun-core"
+		"src/utils/railgun-core",
+		"src/**/*.test.ts",
+		"src/**/__tests__"
 	]
 }
