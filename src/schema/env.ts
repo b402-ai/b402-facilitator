@@ -73,7 +73,7 @@ export const envSchema: JSONSchemaType<IEnvSchema> = {
 		NETWORK: {
 			type: 'string',
 			default: 'bsc',
-			enum: ['bsc', 'base', 'arbitrum', 'arb', 'ethereum', 'eth']
+			enum: ['bsc', 'base', 'arbitrum', 'arb', 'ethereum', 'eth', 'robinhood', 'rh']
 		},
 
 		RELAYER_PRIVATE_KEY: { type: 'string' },

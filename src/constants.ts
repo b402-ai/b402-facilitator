@@ -57,6 +57,14 @@ const tokensByNetwork = {
 			address: '0xdAC17F958D2ee523a2206206994597C13D831ec7',
 			decimals: 6
 		}
+	},
+	robinhood: {
+		// Robinhood Chain (4663) · USDG is the quote/collateral token for the RWA option pools (EIP-3009 capable).
+		USDG: {
+			symbol: 'USDG',
+			address: '0x5fc5360D0400a0Fd4f2af552ADD042D716F1d168',
+			decimals: 6
+		}
 	}
 } as const
 
@@ -64,7 +72,8 @@ const CHAIN_CONFIGS = {
 	bsc: { chainId: 56, name: 'bsc' },
 	base: { chainId: 8453, name: 'base' },
 	arb: { chainId: 42161, name: 'arb' },
-	eth: { chainId: 1, name: 'eth' }
+	eth: { chainId: 1, name: 'eth' },
+	robinhood: { chainId: 4663, name: 'robinhood' }
 } as const
 
 type NetworkName = keyof typeof tokensByNetwork
@@ -77,6 +86,7 @@ function normalizeNetwork(raw: string): NetworkName {
 	if (lower === 'arbitrum' || lower === 'arb') return 'arb'
 	if (lower === 'base' || lower === 'base-mainnet') return 'base'
 	if (lower === 'bsc' || lower === 'bnb' || lower === 'bsc-mainnet') return 'bsc'
+	if (lower === 'robinhood' || lower === 'rh' || lower === 'robinhood-chain') return 'robinhood'
 	const supported = Object.keys(tokensByNetwork).join(', ')
 	throw new Error(`Invalid NETWORK "${raw}". Supported: ${supported}, arbitrum`)
 }
