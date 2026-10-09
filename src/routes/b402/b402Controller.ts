@@ -2001,8 +2001,21 @@ export async function walletIncognitoVerify(request: FastifyRequest, reply: Fast
 			return response
 		}
 
-		// Check if smart wallet is already deployed
-		const needsDeployment = !(await isWalletDeployed(walletAddress))
+		// THREE INDEPENDENT READS, ONE ROUND TRIP INSTEAD OF FOUR.
+		//
+		// `isWalletDeployed` (eth_getCode), the wallet nonce and the fee data do not depend on each
+		// other, and ran one after another — sequential RPC latency on the hot path of every trade.
+		// `getWalletNonce` returns 0 for an undeployed wallet by itself, so nothing here has to guess;
+		// if its read fails the whole verify fails, which is right — a UserOp sent at an invented
+		// nonce would replay or revert.
+		const providerService = getProviderService()
+		const provider = providerService.getProvider()
+		const [deployed, feeData, nonceRead] = await Promise.all([
+			isWalletDeployed(walletAddress),
+			provider.getFeeData(),
+			getWalletNonce(walletAddress)
+		])
+		const needsDeployment = !deployed
 
 		// Build batch calls for the UserOp
 		const batchCalls: BatchCall[] = calls.map((call) => ({
@@ -2012,12 +2025,8 @@ export async function walletIncognitoVerify(request: FastifyRequest, reply: Fast
 		}))
 
 		const callData = encodeExecuteBatch(batchCalls)
-		const walletNonce = needsDeployment ? 0 : await getWalletNonce(walletAddress)
+		const walletNonce = needsDeployment ? 0 : nonceRead
 
-		// Get provider for gas price
-		const providerService = getProviderService()
-		const provider = providerService.getProvider()
-		const feeData = await provider.getFeeData()
 		const baseGasPrice = feeData.gasPrice || ethers.parseUnits('1', 'gwei')
 		const maxFeePerGas = (baseGasPrice * 12n) / 10n
 		const maxPriorityFeePerGas = ethers.parseUnits('1', 'gwei')
@@ -2117,12 +2126,15 @@ export async function walletIncognitoSettle(request: FastifyRequest, reply: Fast
 		let txHash = ''
 
 		let opSuccess = false
+		let mined = false
 		let revertReason: string | undefined
 		for (;;) {
 			try {
 				const receipt = await getUserOpReceipt(userOpHash)
 				txHash = receipt.txHash
 				opSuccess = receipt.success
+				// blockNumber 0 = the fast-settle entry cached at broadcast, before any receipt was read.
+				mined = receipt.blockNumber > 0
 				if (receipt.success) break
 				// UserOp landed but reverted on execution — surface the real reason now
 				// instead of polling forever and reporting a misleading "timeout".
@@ -2159,7 +2171,8 @@ export async function walletIncognitoSettle(request: FastifyRequest, reply: Fast
 		const response: WalletIncognitoSettleResponse = {
 			success: true,
 			userOpHash,
-			txHash
+			txHash,
+			confirmed: mined
 		}
 
 		return response

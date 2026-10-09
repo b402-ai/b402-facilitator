@@ -493,7 +493,7 @@ export async function submitUserOpToBundler(userOp: UserOperation): Promise<stri
 					// Re-price so a replacement clears the prior fee (bump 40%/attempt).
 					const fee = await provider.getFeeData()
 					const b = BigInt(100 + 40 * attempt)
-					let maxFee = ((fee.maxFeePerGas ?? fee.gasPrice ?? 1_000_000n) * b) / 100n
+					const maxFee = ((fee.maxFeePerGas ?? fee.gasPrice ?? 1_000_000n) * b) / 100n
 					let prio = ((fee.maxPriorityFeePerGas ?? fee.gasPrice ?? 1_000_000n) * b) / 100n
 					if (prio > maxFee) prio = maxFee // EIP-1559 invariant
 					overrides = { nonce, maxFeePerGas: maxFee, maxPriorityFeePerGas: prio }
@@ -543,8 +543,15 @@ export async function submitUserOpToBundler(userOp: UserOperation): Promise<stri
 	if (SETTLE_RETURN_ON_BROADCAST) {
 		// Cache the txHash optimistically so getUserOpReceipt returns it NOW; confirm in the background.
 		pruneReceiptCache()
-		receiptCache.set(userOpHash.toLowerCase(), { success: true, txHash: tx.hash, blockNumber: 0, cachedAt: Date.now() })
-		void confirm().catch((err) => console.log('[bundler] background confirm failed:', (err as Error).message))
+		receiptCache.set(userOpHash.toLowerCase(), {
+			success: true,
+			txHash: tx.hash,
+			blockNumber: 0,
+			cachedAt: Date.now()
+		})
+		void confirm().catch((err) =>
+			console.log('[bundler] background confirm failed:', (err as Error).message)
+		)
 		return userOpHash
 	}
 

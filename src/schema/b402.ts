@@ -981,7 +981,10 @@ export const WalletIncognitoSettleResponseSchema = {
 		success: { type: 'boolean' },
 		userOpHash: { type: 'string' },
 		txHash: { type: 'string' },
-		errorReason: { type: 'string' }
+		errorReason: { type: 'string' },
+		// false = answered on broadcast (fast settle); the receipt has not been read yet. Clients must
+		// confirm the fill from the chain before showing it.
+		confirmed: { type: 'boolean' }
 	},
 	required: ['success'],
 	additionalProperties: false
@@ -1053,4 +1056,6 @@ export interface WalletIncognitoSettleResponse {
 	userOpHash?: string
 	txHash?: string
 	errorReason?: string
+	/** false = answered on broadcast; the client must read the receipt before calling it a fill. */
+	confirmed?: boolean
 }
