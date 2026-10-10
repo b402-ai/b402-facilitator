@@ -73,7 +73,8 @@ async function start() {
 		await server.ready()
 
 		initializeProviderService({
-			RPC_URL: server.config.RPC_URL
+			RPC_URL: server.config.RPC_URL,
+			RPC_URL_FALLBACK: server.config.RPC_URL_FALLBACK || undefined
 		})
 
 		server.log.info(`Provider service initialized for network: ${server.config.NETWORK}`)

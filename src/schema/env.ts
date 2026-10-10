@@ -8,6 +8,9 @@ interface IEnvSchema {
 
 	// Blockchain RPC endpoint
 	RPC_URL: string
+	// Optional second RPC endpoint for the settle path: a call that times out or fails in
+	// transport on RPC_URL is retried here (RPC_CALL_TIMEOUT_MS bounds each call, default 3500)
+	RPC_URL_FALLBACK?: string
 
 	// Network selection (bsc or base)
 	NETWORK: string
@@ -69,6 +72,7 @@ export const envSchema: JSONSchemaType<IEnvSchema> = {
 		SERVER_HOST: { type: 'string', default: '0.0.0.0' },
 
 		RPC_URL: { type: 'string', default: 'https://bsc-dataseed.binance.org' },
+		RPC_URL_FALLBACK: { type: 'string', nullable: true },
 
 		NETWORK: {
 			type: 'string',
@@ -129,6 +133,7 @@ function getEnv(): IEnvSchema {
 		SERVER_PORT: process.env.SERVER_PORT || '3402',
 		SERVER_HOST: process.env.SERVER_HOST || '0.0.0.0',
 		RPC_URL: process.env.RPC_URL || 'https://bsc-dataseed.binance.org',
+		RPC_URL_FALLBACK: process.env.RPC_URL_FALLBACK,
 		NETWORK: process.env.NETWORK || 'bsc',
 		RELAYER_PRIVATE_KEY: process.env.RELAYER_PRIVATE_KEY as string,
 		B402_RELAYER_ADDRESS: process.env.B402_RELAYER_ADDRESS as string,

@@ -6,6 +6,14 @@ import { env } from '../schema/env'
 import { BaseErrors } from '../schema/errors'
 import type { BatchCall } from '../types/wallet'
 import { getProviderService } from './provider'
+import {
+	BroadcastError,
+	type BroadcastResult,
+	NonceFloor,
+	broadcastWithReplacement,
+	waitForAnyReceipt
+} from './relayerBroadcast'
+import { errorText, rpcCall } from './rpc'
 import { getTokenAllowance, getWalletNonce, isWalletDeployed } from './wallet'
 
 // ERC-7579 Nexus account ABI
@@ -455,88 +463,92 @@ function withRelayerLock<T>(fn: () => Promise<T>): Promise<T> {
 	return next as Promise<T>
 }
 
-const _isTransientNonceError = (msg: string): boolean =>
-	/nonce too low|replacement (transaction )?underpriced|replacement fee too low|already known|fee too low|known transaction/i.test(
-		msg
-	)
+// One per process: the relayer nonces this instance broadcast recently (see NonceFloor).
+const relayerNonceFloor = new NonceFloor()
 
 export async function submitUserOpToBundler(userOp: UserOperation): Promise<string> {
+	const started = Date.now()
 	const providerService = getProviderService()
-	const provider = providerService.getProvider()
-	const relayer = new ethers.Wallet(env.RELAYER_PRIVATE_KEY, provider)
-	const entryPoint = new ethers.Contract(env.ENTRY_POINT_ADDRESS, ENTRYPOINT_ABI, relayer)
+	const endpoints = providerService.getEndpoints()
+	// Signs locally; every RPC goes through bounded, fail-over calls (./rpc.ts).
+	const relayer = new ethers.Wallet(env.RELAYER_PRIVATE_KEY)
+	const entryPointIface = new ethers.Interface(ENTRYPOINT_ABI)
 
 	const packed = packUserOp(userOp)
 
-	// Compute userOpHash off-chain via EntryPoint view call (cheap, no gas)
+	// Compute userOpHash via an EntryPoint view call (cheap, no gas), bounded.
 	let userOpHash: string
+	let hashTiming: string
 	try {
-		userOpHash = (await entryPoint.getUserOpHash(packed)) as string
+		const r = await rpcCall(endpoints, 'getUserOpHash', async (c) => {
+			const out = await c.call({
+				to: env.ENTRY_POINT_ADDRESS,
+				data: entryPointIface.encodeFunctionData('getUserOpHash', [packed])
+			})
+			return entryPointIface.decodeFunctionResult('getUserOpHash', out)[0] as string
+		})
+		userOpHash = r.value
+		hashTiming = `getUserOpHash=${r.ms}ms@${r.endpoint}`
 	} catch (err) {
-		console.log('getUserOpHash failed:', (err as Error).message)
+		console.log('getUserOpHash failed:', errorText(err))
 		throw new BaseErrors.ERR_BUNDLER_ERROR()
 	}
 
-	// Broadcast handleOps with an EXPLICIT, freshly-fetched pending nonce and (on
-	// retry) bumped EIP-1559 fees. Serialized per instance; retried on nonce/fee
-	// collisions. Returns once the tx is broadcast — NOT after it mines.
-	const MAX_ATTEMPTS = 5
-	let tx: ethers.TransactionResponse
+	// Broadcast handleOps: explicit pending nonce, locally signed, every step bounded with
+	// fail-over, replacement (same nonce, bumped fee) when a send's fate is unknown.
+	// Serialized per instance; returns once the tx is broadcast — NOT after it mines.
+	const queuedAt = Date.now()
+	let lockWaitMs = 0
+	let result: BroadcastResult
 	try {
-		tx = await withRelayerLock(async () => {
-			for (let attempt = 0; ; attempt++) {
-				// Fresh pending nonce every attempt — correct even when the relayer EOA
-				// is shared across instances (in-memory nonce tracking would be wrong).
-				const nonce = await provider.getTransactionCount(relayer.address, 'pending')
-				let overrides: ethers.Overrides = { nonce }
-				if (attempt > 0) {
-					// Re-price so a replacement clears the prior fee (bump 40%/attempt).
-					const fee = await provider.getFeeData()
-					const b = BigInt(100 + 40 * attempt)
-					const maxFee = ((fee.maxFeePerGas ?? fee.gasPrice ?? 1_000_000n) * b) / 100n
-					let prio = ((fee.maxPriorityFeePerGas ?? fee.gasPrice ?? 1_000_000n) * b) / 100n
-					if (prio > maxFee) prio = maxFee // EIP-1559 invariant
-					overrides = { nonce, maxFeePerGas: maxFee, maxPriorityFeePerGas: prio }
+		result = await withRelayerLock(() => {
+			lockWaitMs = Date.now() - queuedAt
+			return broadcastWithReplacement(
+				{
+					to: env.ENTRY_POINT_ADDRESS,
+					data: entryPointIface.encodeFunctionData('handleOps', [[packed], relayer.address]),
+					label: `userOpHash=${userOpHash} sender=${userOp.sender}`
+				},
+				{
+					endpoints,
+					signer: relayer,
+					chainId: BigInt(providerService.getChainId()),
+					nonceFloor: relayerNonceFloor
 				}
-				try {
-					console.log(
-						`[bundler] submit userOpHash=${userOpHash} sender=${userOp.sender} relayerNonce=${nonce} attempt=${attempt}`
-					)
-					return await entryPoint.handleOps([packed], relayer.address, overrides)
-				} catch (err) {
-					const msg = (err as Error).message || ''
-					if (attempt < MAX_ATTEMPTS - 1 && _isTransientNonceError(msg)) {
-						console.log(`[bundler] transient submit error (attempt ${attempt}), retrying: ${msg}`)
-						await new Promise((r) => setTimeout(r, 250 * (attempt + 1)))
-						continue
-					}
-					throw err
-				}
-			}
+			)
 		})
 	} catch (err) {
-		console.log('handleOps submit failed:', (err as Error).message)
+		console.log(
+			`[bundler] timings userOpHash=${userOpHash} FAILED total=${Date.now() - started}ms ${hashTiming} lockWait=${lockWaitMs}ms`
+		)
+		console.log('handleOps submit failed:', errorText(err))
+		if (err instanceof BroadcastError && err.possiblySent.length > 0) {
+			console.log(`[bundler] possibly-sent handleOps txs: ${err.possiblySent.join(',')}`)
+		}
 		console.log('UserOp that failed:', JSON.stringify(userOp, null, 2))
 		throw new BaseErrors.ERR_BUNDLER_ERROR()
 	}
 
-	// tx is BROADCAST here; tx.hash is final. Confirming (tx.wait) is the slow part on mainnet.
-	console.log(`[bundler] handleOps tx submitted: ${tx.hash}`)
-	// Wait for the receipt, parse the UserOpEvent, cache the REAL success/blockNumber.
-	const confirm = async (): Promise<void> => {
-		const receipt = await tx.wait()
+	// tx is BROADCAST here; its hash is final unless a replacement (same nonce) mines instead.
+	console.log(`[bundler] handleOps tx submitted: ${result.hash}`)
+	console.log(
+		`[bundler] timings userOpHash=${userOpHash} total=${Date.now() - started}ms ${hashTiming} lockWait=${lockWaitMs}ms ${result.timings.join(' ')} attempts=${result.attempts} relayerNonce=${result.nonce}`
+	)
+	// Wait for a receipt of ANY of our signed copies, parse the UserOpEvent, cache the REAL result.
+	const confirm = async (timeoutMs: number): Promise<void> => {
+		const receipt = await waitForAnyReceipt(endpoints, result.sentHashes, { timeoutMs })
+		if (!receipt)
+			throw new Error(`no receipt within ${timeoutMs}ms for ${result.sentHashes.join(',')}`)
 		console.log(
-			`[bundler] receipt: status=${receipt?.status}, logs=${receipt?.logs?.length ?? 0}, blockNumber=${receipt?.blockNumber}`
+			`[bundler] receipt: status=${receipt.status}, logs=${receipt.logs?.length ?? 0}, blockNumber=${receipt.blockNumber}`
 		)
-		if (receipt) {
-			const parsed = parseUserOpEventFromReceipt(receipt, userOpHash)
-			console.log(
-				`[bundler] parsed UserOpEvent for our hash: ${parsed ? `success=${parsed.success} txHash=${parsed.txHash}` : 'NOT FOUND IN RECEIPT'}`
-			)
-			if (parsed) {
-				pruneReceiptCache()
-				receiptCache.set(userOpHash.toLowerCase(), parsed)
-			}
+		const parsed = parseUserOpEventFromReceipt(receipt, userOpHash)
+		console.log(
+			`[bundler] parsed UserOpEvent for our hash: ${parsed ? `success=${parsed.success} txHash=${parsed.txHash}` : 'NOT FOUND IN RECEIPT'}`
+		)
+		if (parsed) {
+			pruneReceiptCache()
+			receiptCache.set(userOpHash.toLowerCase(), parsed)
 		}
 	}
 
@@ -545,18 +557,18 @@ export async function submitUserOpToBundler(userOp: UserOperation): Promise<stri
 		pruneReceiptCache()
 		receiptCache.set(userOpHash.toLowerCase(), {
 			success: true,
-			txHash: tx.hash,
+			txHash: result.hash,
 			blockNumber: 0,
 			cachedAt: Date.now()
 		})
-		void confirm().catch((err) =>
+		void confirm(300_000).catch((err) =>
 			console.log('[bundler] background confirm failed:', (err as Error).message)
 		)
 		return userOpHash
 	}
 
 	try {
-		await confirm()
+		await confirm(180_000)
 	} catch (err) {
 		console.log('handleOps wait failed:', (err as Error).message)
 		throw new BaseErrors.ERR_BUNDLER_ERROR()
